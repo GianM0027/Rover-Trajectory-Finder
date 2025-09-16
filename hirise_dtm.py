@@ -1,5 +1,6 @@
 import os
 import rasterio
+from matplotlib import pyplot as plt
 
 
 class HiriseDTM:
@@ -20,8 +21,20 @@ class HiriseDTM:
         self.img_path = img_path
         self.file_name = os.path.split(img_path)[-1].replace(".IMG", "")
         self.numpy_data = data
+        self.metadata = self._get_metadata()
 
-    def get_metadata(self):
+    def plot_dtm(self, figsize=(12, 12)):
+        """
+        :param figsize: plot figure size.
+        Shows the DTM image in a matplotlib figure.
+        """
+        plt.figure(figsize=figsize)
+        plt.imshow(self.numpy_data, cmap="terrain")
+        plt.colorbar(label="Elevation (m)")
+        plt.title("HiRISE DTM")
+        plt.show()
+
+    def _get_metadata(self):
         """
         Returns the metadata of a HiRISE .IMG file, given its tile name in the format
         'aabcd_xxxxxx_xxxx_yyyyyy_yyyy_Vnn'.
