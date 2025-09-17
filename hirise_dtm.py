@@ -1,40 +1,46 @@
 import os
 import rasterio
+from typing import Tuple, Dict
 from matplotlib import pyplot as plt
 
 
 class HiriseDTM:
     """
-    This class takes as input the path to a HiRISE .IMG file, converts it into a NumPy array,
+    This class takes as input the path to a local HiRISE .IMG file, converts it into a NumPy array,
     and provides a set of utility functions for working with it.
     """
 
-    def __init__(self, img_path):
+    def __init__(self, img_path: str | os.PathLike):
         with rasterio.open(img_path) as src:
-            data = src.read(1)  # first band
-            nodata = src.nodata  # check nodata value
+            data = src.read(1)      # first band
+            nodata = src.nodata     # check nodata value
 
         if nodata is not None:
             data = data.astype(float)
             data[data == nodata] = float("nan")
 
         self.img_path = img_path
+        self.image = data
         self.file_name = os.path.split(img_path)[-1].replace(".IMG", "")
-        self.numpy_data = data
         self.metadata = self._get_metadata()
 
-    def plot_dtm(self, figsize=(12, 12)):
+
+    # todo: metodo che estrae una sezione dell'immagine di grandezza fissa
+    # todo: metodo che restituisce le dimensioni dell'immagine
+    # todo: migliorare la funzione di plot per essere più nitida, ma anche per plottare una sezione della mappa
+
+    def plot_dtm(self, figsize: Tuple = (12, 12)) -> None:
         """
         :param figsize: plot figure size.
         Shows the DTM image in a matplotlib figure.
         """
         plt.figure(figsize=figsize)
-        plt.imshow(self.numpy_data, cmap="terrain")
+        plt.imshow(self.image, cmap="terrain")
         plt.colorbar(label="Elevation (m)")
         plt.title("HiRISE DTM")
         plt.show()
 
-    def _get_metadata(self):
+    def _get_metadata(self) -> Dict:
         """
         Returns the metadata of a HiRISE .IMG file, given its tile name in the format
         'aabcd_xxxxxx_xxxx_yyyyyy_yyyy_Vnn'.
