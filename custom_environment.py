@@ -185,7 +185,7 @@ class GridMarsEnv(gym.Env):
 
         if self.render_mode == "human":
             # Print a simple ASCII representation
-            for y in range(self.map_size):
+            for y in range(self.map_size-1, -1, -1):
                 row = ""
                 for x in range(self.map_size):
                     if np.array_equal([x, y], self._agent_relative_location):
