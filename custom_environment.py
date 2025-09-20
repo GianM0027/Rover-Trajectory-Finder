@@ -24,7 +24,7 @@ class GridMarsEnv(gym.Env):
 
     :param dtm: a HiriseDTM object containing the terrain data.
     :param map_size: size of the gridworld (map_size x map_size).
-    :param fov_distance: size of the rover's field of view (fov_distance x fov_distance).
+    :param fov_distance: ray of the rover's field of view. So that the full FOV size is a square matrix of size (fov_distance*2)+1.
     """
 
     def __init__(self, dtm: HiriseDTM, map_size: int = 200, fov_distance: int = 20, render_mode: str = 'rgb_array'):
@@ -35,6 +35,7 @@ class GridMarsEnv(gym.Env):
         # map size and fov distance
         self.map_size = map_size
         self._fov_distance = fov_distance
+        self._fov_matrix_size = (fov_distance*2)+1
 
         # Initialize positions - will be set randomly in reset()
         # Using -1,-1 as "uninitialized" state
@@ -42,11 +43,15 @@ class GridMarsEnv(gym.Env):
         self._agent_relative_location = np.array([-1, -1], dtype=np.int32)
         self._target_location = np.array([-1, -1], dtype=np.int32)
 
+        # Initialize local map - it will be the area extracted from the DTM where the agent will navigate
+        # setting local map position to -1 as "uninitialized" state
+        self._local_map_position = np.array([-1, -1], dtype=np.int32)
+        self._local_map = np.zeros([map_size, map_size], dtype=np.float32)
+
         # Initialize agent field of view - will be properly set in reset()
         # setting mask to 0 as "uninitialized" state
-        self._local_map_position = np.array([-1, -1], dtype=np.int32)
-        self._local_map = np.zeros([fov_distance, fov_distance], dtype=np.float32)
-        self._mask = np.zeros([fov_distance, fov_distance], dtype=np.bool_)
+        self._fov_coordinates = np.zeros([self._fov_matrix_size, self._fov_matrix_size], dtype=np.float32)
+        self._fov_mask = np.zeros([self._fov_matrix_size, self._fov_matrix_size], dtype=np.bool_)
 
         # Define what the agent can observe
         self.observation_space = gym.spaces.Dict(
@@ -55,8 +60,8 @@ class GridMarsEnv(gym.Env):
                 "target": gym.spaces.Box(0, self.map_size - 1, shape=(2,), dtype=np.int32),   # [x, y] goal coordinates
 
                 # matrix with field of view, along with the mask that states whether the agent can see that pixel
-                "local_map": gym.spaces.Box(min_altitude, max_altitude, shape=(fov_distance, fov_distance), dtype=np.float32),
-                "mask": gym.spaces.MultiBinary((fov_distance, fov_distance))
+                "local_fov_map": gym.spaces.Box(min_altitude, max_altitude, shape=(self._fov_matrix_size, self._fov_matrix_size), dtype=np.float32),
+                "fov_mask": gym.spaces.MultiBinary((self._fov_matrix_size, self._fov_matrix_size))
             }
         )
 
@@ -94,12 +99,13 @@ class GridMarsEnv(gym.Env):
 
         # Randomly place the agent anywhere on the grid
         self._agent_relative_location = self.np_random.integers(0, self.map_size, size=2, dtype=int)
+        self._update_fov_coordinates()
 
         # Compute global position of agent
         self._agent_global_location = self._compute_agent_global_position()
 
         # Retrieve the mask corresponding to the visible areas given the global agent position
-        self._mask = self._dtm.get_field_of_view(self._agent_global_location, self._fov_distance)
+        self._fov_mask = self._dtm.get_fov_mask(self._agent_global_location, self._fov_distance)
 
         # Randomly place target, ensuring it is different from agent position
         self._target_location = self._agent_relative_location
@@ -110,6 +116,7 @@ class GridMarsEnv(gym.Env):
 
         observation = self._get_obs()
         info = self._get_info()
+        self.render()
 
         return observation, info
 
@@ -136,6 +143,7 @@ class GridMarsEnv(gym.Env):
             self._agent_relative_location = np.clip(
                 self._agent_relative_location + direction, 0, self.map_size - 1
             )
+            self._update_fov_coordinates()
         else:
             # Movement forbidden: stay in place.
             # todo: maybe add a small penalty for when the agent tries an illegal action
@@ -143,7 +151,7 @@ class GridMarsEnv(gym.Env):
 
         # Global position and mask update
         self._agent_global_location = self._compute_agent_global_position()
-        self._mask = self._dtm.get_field_of_view(self._agent_global_location, self._fov_distance)
+        self._fov_mask = self._dtm.get_fov_mask(self._agent_global_location, self._fov_distance)
 
         # Check if agent reached the target
         terminated = np.array_equal(self._agent_relative_location, self._target_location)
@@ -177,17 +185,51 @@ class GridMarsEnv(gym.Env):
 
         if self.render_mode == "human":
             # Print a simple ASCII representation
-            for y in range(self.map_size - 1, -1, -1):  # Top to bottom
+            for y in range(self.map_size):
                 row = ""
                 for x in range(self.map_size):
                     if np.array_equal([x, y], self._agent_relative_location):
                         row += "A "  # Agent
                     elif np.array_equal([x, y], self._target_location):
                         row += "T "  # Target
+                    elif (x, y) in self._fov_coordinates:
+                        row += "* "  # Agent FOV
                     else:
                         row += ". "  # Empty
                 print(row)
             print()
+
+    def _update_fov_coordinates(self):
+        agent_x, agent_y = self._agent_relative_location
+
+        fov_x_low, fov_x_high = (max(agent_x - self._fov_distance, 0),
+                                 min(agent_x + self._fov_distance, self.map_size - 1))
+        fov_y_low, fov_y_high = (max(agent_y - self._fov_distance, 0),
+                                 min(agent_y + self._fov_distance, self.map_size - 1))
+
+        self._fov_coordinates = [
+            (x, y)
+            for x in range(fov_x_low, fov_x_high + 1)
+            for y in range(fov_y_low, fov_y_high + 1)
+        ]
+
+    def _get_fov_altitudes(self):
+        rows, cols = zip(*self._fov_coordinates)
+        row_min, row_max = min(rows), max(rows) + 1
+        col_min, col_max = min(cols), max(cols) + 1
+
+        fov_values = self._local_map[row_min:row_max, col_min:col_max]
+
+        # Add rows with np.inf if rover close to the map edge
+        target_size = (self._fov_distance * 2) + 1
+        while fov_values.shape[0] < target_size:
+            fov_values = np.vstack([fov_values, np.full((1, fov_values.shape[1]), np.inf)])
+
+        # Add columns with np.inf if rover close to the map edge
+        while fov_values.shape[1] < target_size:
+            fov_values = np.hstack([fov_values, np.full((fov_values.shape[0], 1), np.inf)])
+
+        return fov_values
 
     def _compute_agent_global_position(self):
         return self._local_map_position + self._agent_relative_location
@@ -198,11 +240,12 @@ class GridMarsEnv(gym.Env):
 
         :return: Observation with agent and target positions
         """
+        # todo: restituire anche la fov map, non solo la local map
         return {
             "agent": self._agent_relative_location,
             "target": self._target_location,
-            "local_map": self._local_map,
-            "mask": self._mask
+            "local_fov_map": self._get_fov_altitudes(),
+            "mask": self._fov_mask
         }
 
     def _get_info(self):

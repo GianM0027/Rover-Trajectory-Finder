@@ -21,10 +21,10 @@ class HiriseDTM:
 
         if nodata is not None:
             data = data.astype(float)
-            data[data == nodata] = float("nan")
+            data[data == nodata] = np.inf#float("nan")
 
-        self.img_path = img_path
         self.numpy_image = data
+        self.img_path = img_path
         self.file_name = os.path.split(img_path)[-1].replace(".IMG", "")
         self.metadata = self._get_metadata()
 
@@ -35,11 +35,14 @@ class HiriseDTM:
 
         return np.zeros((size, size)), (0, 0)
 
-    def get_field_of_view(self, position, fov_distance):
+    def get_fov_mask(self, position, fov_distance):
         # todo: metodo che dato un punto di coordinate (x,y) restituisce la matrice booleana che evidenzia i pixel che
         #       il rover vede da quella posizione
 
-        return np.ones((fov_distance, fov_distance))
+        # todo: se il rover è molto vicino al bordo della mappa, può essere che il
+        mask_size = (fov_distance*2)+1
+
+        return np.ones((mask_size, mask_size))
 
     def get_possible_moves(self, position):
         # todo: metodo che dato un punto di coordinate (x,y) restituisce la matrice booleana che evidenzia i pixel su cui
