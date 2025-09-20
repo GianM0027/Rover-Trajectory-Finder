@@ -1,7 +1,6 @@
-from typing import Optional
 import numpy as np
 import gymnasium as gym
-
+from typing import Optional
 from hirise_dtm import HiriseDTM
 
 
@@ -97,7 +96,7 @@ class GridMarsEnv(gym.Env):
         self._agent_relative_location = self.np_random.integers(0, self.map_size, size=2, dtype=int)
 
         # Compute global position of agent
-        self._agent_global_location = self._get_agent_global_position()
+        self._agent_global_location = self._compute_agent_global_position()
 
         # Retrieve the mask corresponding to the visible areas given the global agent position
         self._mask = self._dtm.get_field_of_view(self._agent_global_location, self._fov_distance)
@@ -126,7 +125,7 @@ class GridMarsEnv(gym.Env):
         direction = self._action_to_direction[action]
 
         # Boolean matrix 3x3 indicating which positions the agent can move to and which are forbidden (wall, big step, etc...)
-        movements_allowed = self._dtm.get_possible_moves(self._agent_relative_location)
+        movements_allowed = self._dtm.get_possible_moves(self._agent_global_location)
 
         # Convert the direction (dx, dy) into an index in the 3x3 movements_allowed matrix, to retrieve whether that direction is allowed
         move_index = (1 + direction[0], 1 + direction[1])
@@ -142,8 +141,9 @@ class GridMarsEnv(gym.Env):
             # todo: maybe add a small penalty for when the agent tries an illegal action
             pass
 
-        # Global position
-        self._agent_global_location = self._get_agent_global_position()
+        # Global position and mask update
+        self._agent_global_location = self._compute_agent_global_position()
+        self._mask = self._dtm.get_field_of_view(self._agent_global_location, self._fov_distance)
 
         # Check if agent reached the target
         terminated = np.array_equal(self._agent_relative_location, self._target_location)
@@ -189,7 +189,7 @@ class GridMarsEnv(gym.Env):
                 print(row)
             print()
 
-    def _get_agent_global_position(self):
+    def _compute_agent_global_position(self):
         return self._local_map_position + self._agent_relative_location
 
     def _get_obs(self):

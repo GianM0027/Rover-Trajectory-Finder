@@ -28,19 +28,6 @@ class HiriseDTM:
         self.file_name = os.path.split(img_path)[-1].replace(".IMG", "")
         self.metadata = self._get_metadata()
 
-        # todo: quando si istanzia la classe, richiamare automaticamente le funzioni che calcolano il fov e
-        #       i pixel raggiungibili da ogni posizione. Così che poi in fase di training, data una posizione sulla mappa,
-        #       quella informazione sia recuperabile in tempo O(1).
-        self._compute_FOV_per_pixel()
-        self._compute_possible_moves_per_pixel()
-
-
-    def _compute_FOV_per_pixel(self):
-        pass
-
-    def _compute_possible_moves_per_pixel(self):
-        pass
-
     def get_portion_of_map(self, size):
         # todo: metodo che estrae una sezione dell'immagine di grandezza (size x size), evitando i NaN
         # todo: il metodo restituisce anche le coordinate top-left dalle quali è stata ricavata la porzione di mappa
