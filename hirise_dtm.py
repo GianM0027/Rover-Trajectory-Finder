@@ -28,6 +28,19 @@ class HiriseDTM:
         self.file_name = os.path.split(img_path)[-1].replace(".IMG", "")
         self.metadata = self._get_metadata()
 
+        # todo: quando si istanzia la classe, richiamare automaticamente le funzioni che calcolano il fov e
+        #       i pixel raggiungibili da ogni posizione. Così che poi in fase di training, data una posizione sulla mappa,
+        #       quella informazione sia recuperabile in tempo O(1).
+        self._compute_FOV_per_pixel()
+        self._compute_possible_moves_per_pixel()
+
+
+    def _compute_FOV_per_pixel(self):
+        pass
+
+    def _compute_possible_moves_per_pixel(self):
+        pass
+
     def get_portion_of_map(self, size):
         # todo: metodo che estrae una sezione dell'immagine di grandezza (size x size), evitando i NaN
         # todo: il metodo restituisce anche le coordinate top-left dalle quali è stata ricavata la porzione di mappa
@@ -40,6 +53,17 @@ class HiriseDTM:
         #       il rover vede da quella posizione
 
         return np.ones((fov_distance, fov_distance))
+
+    def get_possible_moves(self, position):
+        # todo: metodo che dato un punto di coordinate (x,y) restituisce la matrice booleana che evidenzia i pixel su cui
+        #       il rover può spostarsi da quella posizione.
+        #       Per esempio:
+        #       - Se a destra l'elevazione è di poco minore di quella su cui si trova il rover, allora ci si può spostare
+        #       - Se a sinistra c'è una forte elevazione rispetto a dove sta il rover (un muro) allora non ci si può spostare
+        #       - E così via... Alla fine avremo una matrice 3x3 booleana che indica se il rover può spostarsi di una posizione
+        #         su quel pixel (1) oppure no (0)
+
+        return np.ones((3, 3))
 
     def get_lowest_highest_altitude(self):
         return np.nanmin(self.numpy_image), np.nanmax(self.numpy_image)

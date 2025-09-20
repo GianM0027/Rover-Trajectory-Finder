@@ -125,11 +125,24 @@ class GridMarsEnv(gym.Env):
         # Map the discrete action (0-8) to a movement direction
         direction = self._action_to_direction[action]
 
-        # Update agent position, ensuring it stays within grid bounds
-        # np.clip prevents the agent from walking off the edge
-        self._agent_relative_location = np.clip(
-            self._agent_relative_location + direction, 0, self.map_size - 1
-        )
+        # Boolean matrix 3x3 indicating which positions the agent can move to and which are forbidden (wall, big step, etc...)
+        movements_allowed = self._dtm.get_possible_moves(self._agent_relative_location)
+
+        # Convert the direction (dx, dy) into an index in the 3x3 movements_allowed matrix, to retrieve whether that direction is allowed
+        move_index = (1 + direction[0], 1 + direction[1])
+
+        # Check if the move is allowed
+        if movements_allowed[move_index]:
+            # Update agent position, ensuring it stays within grid bounds
+            self._agent_relative_location = np.clip(
+                self._agent_relative_location + direction, 0, self.map_size - 1
+            )
+        else:
+            # Movement forbidden: stay in place.
+            # todo: maybe add a small penalty for when the agent tries an illegal action
+            pass
+
+        # Global position
         self._agent_global_location = self._get_agent_global_position()
 
         # Check if agent reached the target
@@ -155,7 +168,13 @@ class GridMarsEnv(gym.Env):
         """
         Render the environment for human viewing.
         """
-        # todo: farlo più carino, con una griglia effettiva che faccia vedere cosa succede
+        # todo: farlo più carino con pygame, con una griglia effettiva che faccia vedere cosa succede (possibilmente con visuale
+        #       corrispondente al FOV dell'agente, ma con possibilità di fare zoomm-out su intera mappa.
+        #       guarda -> https://gymnasium.farama.org/tutorials/gymnasium_basics/environment_creation/
+
+        # todo: non includere solamente Agent e Target, ma prendere in considerazione anche le elevazioni della mappa
+        #       contenute in "self._local_map" per disegnare ogni cella con un colore diverso
+
         if self.render_mode == "human":
             # Print a simple ASCII representation
             for y in range(self.map_size - 1, -1, -1):  # Top to bottom
@@ -190,7 +209,7 @@ class GridMarsEnv(gym.Env):
         """
         Compute auxiliary information for debugging.
 
-        :return: Debugging info with distance between agent and target
+        :return: Debugging info that will be returned from the reset() and step() methods.
         """
         # todo: return additional information if needed
         return {
