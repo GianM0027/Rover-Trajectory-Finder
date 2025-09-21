@@ -28,12 +28,24 @@ class HiriseDTM:
         self.file_name = os.path.split(img_path)[-1].replace(".IMG", "")
         self.metadata = self._get_metadata()
 
-    def get_portion_of_map(self, size):
-        # todo: metodo che estrae una sezione dell'immagine di grandezza (size x size), evitando i np.inf
-        # todo: il metodo restituisce anche le coordinate top-left dalle quali è stata ricavata la porzione di mappa
-        #       IMPORTANTE: la top left position è una tupla (x, y) dove x è la colonna e y è la riga, non viceversa
+    def get_portion_of_map(self, size, max_percentage_inf=0.2):
+        # Extracts a size x size portion of the image, avoiding too many np.inf
+        img_height, img_width = self.numpy_image.shape[:2]
 
-        return np.zeros((size, size)), (0, 0)
+        while True:
+            # pick random top-left corner
+            x = np.random.randint(0, img_width - size + 1)
+            y = np.random.randint(0, img_height - size + 1)
+
+            # extract portion
+            image_subset = self.numpy_image[y:y + size, x:x + size]
+
+            # count infinities
+            num_inf = np.sum(np.isinf(image_subset))
+            if num_inf < max_percentage_inf * (size * size):
+                break
+
+        return image_subset, (x, y)
 
     def get_fov_mask(self, position, fov_distance):
         # todo: metodo che dato un punto di coordinate (x,y) restituisce la matrice booleana che evidenzia i pixel che
@@ -52,7 +64,6 @@ class HiriseDTM:
         #       - Se a sinistra c'è una forte elevazione rispetto a dove sta il rover (un muro) allora non ci si può spostare
         #       - E così via... Alla fine avremo una matrice 3x3 booleana che indica se il rover può spostarsi di una posizione
         #         su quel pixel (1) oppure no (0)
-
         return np.ones((3, 3))
 
     def get_lowest_highest_altitude(self):
