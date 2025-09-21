@@ -14,8 +14,8 @@ class GridMarsEnv(gym.Env):
     cells are observable.
 
     Observation Space (Dict):
-        - "agent": 2D coordinates [x, y] of the rover.
-        - "target": 2D coordinates [x, y] of the destination.
+        - "agent": 2D coordinates [y, x] of the rover.
+        - "target": 2D coordinates [y, x] of the destination.
         - "local_map": (fov_distance x fov_distance) matrix of altitude values in the rover's FOV.
         - "mask": (fov_distance x fov_distance) binary matrix indicating which cells are observable in the local_map.
 
@@ -27,7 +27,12 @@ class GridMarsEnv(gym.Env):
     :param fov_distance: ray of the rover's field of view. So that the full FOV size is a square matrix of size (fov_distance*2)+1.
     """
 
-    def __init__(self, dtm: HiriseDTM, map_size: int = 200, fov_distance: int = 20, render_mode: str = 'rgb_array'):
+    def __init__(self, dtm: HiriseDTM,
+                 map_size: int = 200,
+                 fov_distance: int = 20,
+                 render_mode: str = 'rgb_array',
+                 rover_max_step=0.3,
+                 rover_max_drop=0.5):
         # Retrieving min and max altitude from map
         self._dtm = dtm
         min_altitude, max_altitude = self._dtm.get_lowest_highest_altitude()
@@ -56,8 +61,8 @@ class GridMarsEnv(gym.Env):
         # Define what the agent can observe
         self.observation_space = gym.spaces.Dict(
             {
-                "agent": gym.spaces.Box(0, self.map_size - 1, shape=(2,), dtype=np.int32),    # [x, y] agent coordinates
-                "target": gym.spaces.Box(0, self.map_size - 1, shape=(2,), dtype=np.int32),   # [x, y] goal coordinates
+                "agent": gym.spaces.Box(0, self.map_size - 1, shape=(2,), dtype=np.int32),    # [y, x] agent coordinates
+                "target": gym.spaces.Box(0, self.map_size - 1, shape=(2,), dtype=np.int32),   # [y, x] goal coordinates
 
                 # matrix with field of view, along with the mask that states whether the agent can see that pixel
                 "local_fov_map": gym.spaces.Box(min_altitude, max_altitude, shape=(self._fov_matrix_size, self._fov_matrix_size), dtype=np.float32),
@@ -70,18 +75,23 @@ class GridMarsEnv(gym.Env):
 
         # Map action numbers to actual movements on the grid
         self._action_to_direction = {
-            0: np.array([1, 0]),        # Move right
-            1: np.array([0, 1]),        # Move up
-            2: np.array([-1, 0]),       # Move left
-            3: np.array([0, -1]),       # Move down
-            4: np.array([1, 1]),        # Move right-up
-            5: np.array([-1, 1]),       # Move left-up
-            6: np.array([1, -1]),       # Move right-down
-            7: np.array([-1, -1]),      # Move left-down
+            0: np.array([0, 1]),        # Move right (y, x+1)
+            1: np.array([1, 0]),        # Move up (y+1, x)
+            2: np.array([0, -1]),       # Move left (y, x-1)
+            3: np.array([-1, 0]),       # Move down (y-1, x)
+            4: np.array([1, 1]),        # Move right-up (y+1, x+1)
+            5: np.array([1, -1]),       # Move left-up (y+1, x-1)
+            6: np.array([-1, 1]),       # Move right-down (y-1, x+1)
+            7: np.array([-1, -1]),      # Move left-down (y-1, x-1)
         }
 
         # render mode for visualisation
         self.render_mode = render_mode
+
+        # rover max jump and max drop
+        self.rover_max_step = rover_max_step
+        self.rover_max_drop = rover_max_drop
+        self.current_move_allowed_flag = True
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         """Start a new episode.
@@ -132,7 +142,10 @@ class GridMarsEnv(gym.Env):
         direction = self._action_to_direction[action]
 
         # Boolean matrix 3x3 indicating which positions the agent can move to and which are forbidden (wall, big step, etc...)
-        movements_allowed = self._dtm.get_possible_moves(self._agent_global_location)
+        movements_allowed = self._dtm.get_possible_moves(position=self._agent_global_location,
+                                                         moves=self._action_to_direction,
+                                                         max_step=self.rover_max_step,
+                                                         max_drop=self.rover_max_drop)
 
         # Convert the direction (dx, dy) into an index in the 3x3 movements_allowed matrix, to retrieve whether that direction is allowed
         move_index = (1 + direction[0], 1 + direction[1])
@@ -144,8 +157,10 @@ class GridMarsEnv(gym.Env):
                 self._agent_relative_location + direction, 0, self.map_size - 1
             )
             self._update_fov_coordinates()
+            self.current_move_allowed_flag = True
         else:
             # Movement forbidden: stay in place.
+            self.current_move_allowed_flag = False
             # todo: maybe add a small penalty for when the agent tries an illegal action like bumping on an obstacle/wall
             pass
 
@@ -185,22 +200,24 @@ class GridMarsEnv(gym.Env):
 
         if self.render_mode == "human":
             # Print a simple ASCII representation
-            for y in range(self.map_size-1, -1, -1):
+            for y in range(self.map_size):
                 row = ""
                 for x in range(self.map_size):
-                    if np.array_equal([x, y], self._agent_relative_location):
+                    if np.array_equal([y, x], self._agent_relative_location):
                         row += "A "  # Agent
-                    elif np.array_equal([x, y], self._target_location):
+                    elif np.array_equal([y, x], self._target_location):
                         row += "T "  # Target
-                    elif (x, y) in self._fov_coordinates:
+                    elif (y, x) in self._fov_coordinates:
                         row += "* "  # Agent FOV
                     else:
                         row += ". "  # Empty
                 print(row)
             print()
+            if not self.current_move_allowed_flag:
+                print("Current move not allowed")
 
     def _update_fov_coordinates(self):
-        agent_x, agent_y = self._agent_relative_location
+        agent_y, agent_x = self._agent_relative_location
 
         fov_x_low, fov_x_high = (max(agent_x - self._fov_distance, 0),
                                  min(agent_x + self._fov_distance, self.map_size - 1))
@@ -208,9 +225,9 @@ class GridMarsEnv(gym.Env):
                                  min(agent_y + self._fov_distance, self.map_size - 1))
 
         self._fov_coordinates = [
-            (x, y)
-            for x in range(fov_x_low, fov_x_high + 1)
+            (y, x)
             for y in range(fov_y_low, fov_y_high + 1)
+            for x in range(fov_x_low, fov_x_high + 1)
         ]
 
     def _get_fov_altitudes(self):
@@ -232,6 +249,7 @@ class GridMarsEnv(gym.Env):
         return fov_values
 
     def _compute_agent_global_position(self):
+        # local map position in (width,height) format + agent location in (y,x) format
         return self._local_map_position + self._agent_relative_location
 
     def _get_obs(self):
@@ -240,7 +258,6 @@ class GridMarsEnv(gym.Env):
 
         :return: Observation with agent and target positions
         """
-        # todo: restituire anche la fov map, non solo la local map
         return {
             "agent": self._agent_relative_location,
             "target": self._target_location,
