@@ -1,7 +1,6 @@
 import os
-
-import numpy as np
 import rasterio
+import numpy as np
 from typing import Tuple, Dict
 from matplotlib import pyplot as plt
 
@@ -45,10 +44,11 @@ class HiriseDTM:
             if num_inf < max_percentage_inf * (size * size):
                 break
 
-        return image_subset, (x, y)
+        # return image portion and its coordinates as (row,column)=(y,x)
+        return image_subset, (y, x)
 
     def get_fov_mask(self, position, fov_distance):
-        # todo: metodo che dato un punto di coordinate (x,y) restituisce la matrice booleana che evidenzia i pixel che
+        # todo: metodo che dato un punto di coordinate (y,x) restituisce la matrice booleana che evidenzia i pixel che
         #       il rover vede da quella posizione
 
         # todo: se il rover è molto vicino al bordo della mappa, può essere che il
@@ -56,15 +56,41 @@ class HiriseDTM:
 
         return np.ones((mask_size, mask_size))
 
-    def get_possible_moves(self, position):
-        # todo: metodo che dato un punto di coordinate (x,y) restituisce la matrice booleana che evidenzia i pixel su cui
-        #       il rover può spostarsi da quella posizione.
-        #       Per esempio:
-        #       - Se a destra l'elevazione è di poco minore di quella su cui si trova il rover, allora ci si può spostare
-        #       - Se a sinistra c'è una forte elevazione rispetto a dove sta il rover (un muro) allora non ci si può spostare
-        #       - E così via... Alla fine avremo una matrice 3x3 booleana che indica se il rover può spostarsi di una posizione
-        #         su quel pixel (1) oppure no (0)
-        return np.ones((3, 3))
+    def get_possible_moves(self, position, moves, max_step, max_drop):
+        """
+        Given a point (y, x), returns a 3x3 boolean matrix of possible moves.
+        - 1 = rover can move there
+        - 0 = rover cannot move there
+        """
+        possible_moves = np.ones((3, 3), dtype=bool)
+        y, x = position
+        current_altitude = self.numpy_image[y, x]
+
+        for _, move in moves.items():
+            moves_idx = np.array((1, 1)) + move         # map move to 3x3 possible_moves matrix index
+            new_y, new_x = np.array(position) + move
+
+            # Out of bounds check
+            if not (0 <= new_y < self.numpy_image.shape[0] and 0 <= new_x < self.numpy_image.shape[1]):
+                possible_moves[moves_idx[0], moves_idx[1]] = 0
+                continue
+
+            new_altitude = self.numpy_image[new_y, new_x]
+
+            # Invalid terrain
+            if new_altitude == np.inf:
+                possible_moves[moves_idx[0], moves_idx[1]] = 0
+                continue
+
+            # Too steep to climb
+            if new_altitude - current_altitude > max_step:
+                possible_moves[moves_idx[0], moves_idx[1]] = 0
+
+            # Too steep downward drop
+            if current_altitude - new_altitude > max_drop:
+                possible_moves[moves_idx[0], moves_idx[1]] = 0
+
+        return possible_moves
 
     def get_lowest_highest_altitude(self):
         return np.nanmin(self.numpy_image), np.nanmax(self.numpy_image)
