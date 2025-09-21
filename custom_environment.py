@@ -76,13 +76,13 @@ class GridMarsEnv(gym.Env):
         # Map action numbers to actual movements on the grid
         self._action_to_direction = {
             0: np.array([0, 1]),        # Move right (y, x+1)
-            1: np.array([1, 0]),        # Move up (y+1, x)
+            1: np.array([1, 0]),        # Move down (y+1, x)
             2: np.array([0, -1]),       # Move left (y, x-1)
-            3: np.array([-1, 0]),       # Move down (y-1, x)
-            4: np.array([1, 1]),        # Move right-up (y+1, x+1)
-            5: np.array([1, -1]),       # Move left-up (y+1, x-1)
-            6: np.array([-1, 1]),       # Move right-down (y-1, x+1)
-            7: np.array([-1, -1]),      # Move left-down (y-1, x-1)
+            3: np.array([-1, 0]),       # Move up (y-1, x)
+            4: np.array([1, 1]),        # Move right-down (y+1, x+1)
+            5: np.array([1, -1]),       # Move left-down (y+1, x-1)
+            6: np.array([-1, 1]),       # Move right-up (y-1, x+1)
+            7: np.array([-1, -1]),      # Move left-up (y-1, x-1)
         }
 
         # render mode for visualisation
