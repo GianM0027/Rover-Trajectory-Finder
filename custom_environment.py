@@ -2,7 +2,7 @@ import numpy as np
 import gymnasium as gym
 from typing import Optional
 from hirise_dtm import HiriseDTM
-
+import pygame
 
 class GridMarsEnv(gym.Env):
     """
@@ -25,6 +25,13 @@ class GridMarsEnv(gym.Env):
     :param dtm: a HiriseDTM object containing the terrain data.
     :param map_size: size of the gridworld (map_size x map_size).
     :param fov_distance: ray of the rover's field of view. So that the full FOV size is a square matrix of size (fov_distance*2)+1.
+    :param render_mode: possible values are "human", "ascii" and "rgb_array".
+                        If set to "human", graphic rendering is performed by using pygame (does not work on Jupyter notebooks).
+                        If set to "ascii", graphic rendering is performed by using ascii.
+                        Otherwise, no rendering is performed.
+    :param rover_max_step: maximum obstacle height the rover can overcome when moving on the map.
+    :param rover_max_drop: maximum drop the rover can overcome when moving on the map.
+    :param render_window_size: window size for the rendering of the environment when render_mode="human".
     """
 
     def __init__(self, dtm: HiriseDTM,
@@ -32,7 +39,8 @@ class GridMarsEnv(gym.Env):
                  fov_distance: int = 20,
                  render_mode: str = 'rgb_array',
                  rover_max_step=0.3,
-                 rover_max_drop=0.5):
+                 rover_max_drop=0.5,
+                 render_window_size=512):
         # Retrieving min and max altitude from map
         self._dtm = dtm
         min_altitude, max_altitude = self._dtm.get_lowest_highest_altitude()
@@ -85,6 +93,17 @@ class GridMarsEnv(gym.Env):
             7: np.array([-1, -1]),      # Move left-up (y-1, x-1)
         }
 
+        self._action_to_direction_string = {
+            0: "right",
+            1: "down",
+            2: "left",
+            3: "up",
+            4: "right-down",
+            5: "left-down",
+            6: "right-up",
+            7: "left-up",
+        }
+
         # render mode for visualisation
         self.render_mode = render_mode
 
@@ -92,6 +111,11 @@ class GridMarsEnv(gym.Env):
         self.rover_max_step = rover_max_step
         self.rover_max_drop = rover_max_drop
         self.current_move_allowed_flag = True
+
+        # rendering parameters
+        self.render_window_size = render_window_size
+        self.window = None
+        self.clock = None
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         """Start a new episode.
@@ -130,7 +154,7 @@ class GridMarsEnv(gym.Env):
 
         return observation, info
 
-    def step(self, action: int):
+    def step(self, action: int, verbose=False):
         """
         Execute one timestep within the environment.
 
@@ -178,25 +202,115 @@ class GridMarsEnv(gym.Env):
         # todo: create a better reward model
         reward = 1 if terminated else 0
 
-        # todo: create the logic according to which the rover cannot overcome certain obstacles (ad esempio non può scavalcare gradini più alti di tot cm)
         # todo: create an energy consumption mechanism depending on the slope
 
         observation = self._get_obs()
         info = self._get_info()
         self.render()
 
+        if verbose:
+            # todo: add other stuff for debugging purposes
+            print(f"Action Selected: {self._action_to_direction_string[action]}")
+            print(f"Movement allowed: {self.current_move_allowed_flag}")
+
         return observation, reward, terminated, truncated, info
 
     def render(self):
+        if self.render_mode == "human":
+            self.render_pygame()
+        elif self.render_mode == "ascii":
+            self.render_ascii()
+        else:
+            pass
+
+    def render_pygame(self):
+        if self.window is None:
+            pygame.init()
+            pygame.display.init()
+            self.window = pygame.display.set_mode((self.render_window_size, self.render_window_size))
+        if self.clock is None:
+            self.clock = pygame.time.Clock()
+
+        canvas = pygame.Surface((self.render_window_size, self.render_window_size))
+        canvas.fill((255, 255, 255))
+        pix_square_size = self.render_window_size / self.map_size
+
+        # Map drown according to altitudes (grayscale)
+        min_alt, max_alt = np.nanmin(self._local_map), np.nanmax(self._local_map)
+        norm = (self._local_map - min_alt) / (max_alt - min_alt + 1e-9)
+
+        for y in range(self.map_size):
+            for x in range(self.map_size):
+                val = norm[y, x]
+                color = (int(255 * (1 - val)), int(255 * (1 - val)), int(255 * (1 - val)))
+                rect = pygame.Rect(
+                    x * pix_square_size,
+                    y * pix_square_size,
+                    pix_square_size,
+                    pix_square_size,
+                )
+                pygame.draw.rect(canvas, color, rect)
+
+        # Target
+        ty, tx = self._target_location
+        pygame.draw.rect(
+            canvas,
+            (255, 0, 0),
+            pygame.Rect(
+                tx * pix_square_size,
+                ty * pix_square_size,
+                pix_square_size,
+                pix_square_size,
+            ),
+        )
+
+        # Agent
+        ay, ax = self._agent_relative_location
+        pygame.draw.circle(
+            canvas,
+            (0, 0, 255),
+            (int((ax + 0.5) * pix_square_size), int((ay + 0.5) * pix_square_size)),
+            pix_square_size / 3,
+        )
+
+        # Highlighted FOV
+        for (fy, fx) in self._fov_coordinates:
+            rect = pygame.Rect(
+                fx * pix_square_size,
+                fy * pix_square_size,
+                pix_square_size,
+                pix_square_size,
+            )
+            pygame.draw.rect(canvas, (0, 255, 0), rect, width=2)
+
+        # Map Grid
+        for i in range(self.map_size + 1):
+            # vertical lines
+            pygame.draw.line(
+                canvas,
+                (50, 50, 50),
+                (i * pix_square_size, 0),
+                (i * pix_square_size, self.render_window_size),
+                width=1,
+            )
+            # horizontal lines
+            pygame.draw.line(
+                canvas,
+                (50, 50, 50),
+                (0, i * pix_square_size),
+                (self.render_window_size, i * pix_square_size),
+                width=1,
+            )
+
+        self.window.blit(canvas, canvas.get_rect())
+        pygame.event.pump()
+        pygame.display.update()
+        self.clock.tick(1)  # FPS
+
+    def render_ascii(self):
         """
         Render the environment for human viewing.
         """
-        # todo: farlo più carino con pygame, con una griglia effettiva che faccia vedere cosa succede (possibilmente con visuale
-        #       corrispondente al FOV dell'agente, ma con possibilità di fare zoomm-out su intera mappa.
-        #       guarda -> https://gymnasium.farama.org/tutorials/gymnasium_basics/environment_creation/
-
-        # todo: non includere solamente Agent e Target, ma prendere in considerazione anche le elevazioni della mappa
-        #       contenute in "self._local_map" per disegnare ogni cella con un colore diverso
 
         if self.render_mode == "human":
             # Print a simple ASCII representation
@@ -213,8 +327,6 @@ class GridMarsEnv(gym.Env):
                         row += ". "  # Empty
                 print(row)
             print()
-            if not self.current_move_allowed_flag:
-                print("Current move not allowed")
 
     def _update_fov_coordinates(self):
         agent_y, agent_x = self._agent_relative_location
