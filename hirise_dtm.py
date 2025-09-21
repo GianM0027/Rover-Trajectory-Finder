@@ -21,7 +21,7 @@ class HiriseDTM:
 
         if nodata is not None:
             data = data.astype(float)
-            data[data == nodata] = np.inf#float("nan")
+            data[data == nodata] = np.inf  # infinitely tall wall at map borders
 
         self.numpy_image = data
         self.img_path = img_path
