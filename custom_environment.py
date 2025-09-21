@@ -146,7 +146,7 @@ class GridMarsEnv(gym.Env):
             self._update_fov_coordinates()
         else:
             # Movement forbidden: stay in place.
-            # todo: maybe add a small penalty for when the agent tries an illegal action
+            # todo: maybe add a small penalty for when the agent tries an illegal action like bumping on an obstacle/wall
             pass
 
         # Global position and mask update
@@ -156,7 +156,7 @@ class GridMarsEnv(gym.Env):
         # Check if agent reached the target
         terminated = np.array_equal(self._agent_relative_location, self._target_location)
 
-        # todo: add truncation mechanism if required (simulation ends before rover reaches the goal)
+        # todo: add truncation mechanism if required (simulation ends before rover reaches the goal because max_steps reached)
         truncated = False
 
         # Simple reward structure: +1 for reaching target, 0 otherwise

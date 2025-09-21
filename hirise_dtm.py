@@ -29,9 +29,9 @@ class HiriseDTM:
         self.metadata = self._get_metadata()
 
     def get_portion_of_map(self, size):
-        # todo: metodo che estrae una sezione dell'immagine di grandezza (size x size), evitando i NaN
+        # todo: metodo che estrae una sezione dell'immagine di grandezza (size x size), evitando i np.inf
         # todo: il metodo restituisce anche le coordinate top-left dalle quali è stata ricavata la porzione di mappa
-        #       IMPORTANTE: la top left position è una tupla (x, y) dove x è la colonna e y è la riga
+        #       IMPORTANTE: la top left position è una tupla (x, y) dove x è la colonna e y è la riga, non viceversa
 
         return np.zeros((size, size)), (0, 0)
 
