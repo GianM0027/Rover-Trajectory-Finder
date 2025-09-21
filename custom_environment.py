@@ -224,6 +224,7 @@ class GridMarsEnv(gym.Env):
             pass
 
     def render_pygame(self):
+        # todo: aggiungere una versione velocizzata per la simulazione
         if self.window is None:
             pygame.init()
             pygame.display.init()
@@ -233,7 +234,7 @@ class GridMarsEnv(gym.Env):
 
         canvas = pygame.Surface((self.render_window_size, self.render_window_size))
         canvas.fill((255, 255, 255))
-        pix_square_size = self.render_window_size / self.map_size
+        pix_square_size = self.render_window_size // self.map_size
 
         # Map drown according to altitudes (grayscale)
         min_alt, max_alt = np.nanmin(self._local_map), np.nanmax(self._local_map)
@@ -281,26 +282,7 @@ class GridMarsEnv(gym.Env):
                 pix_square_size,
                 pix_square_size,
             )
-            pygame.draw.rect(canvas, (0, 255, 0), rect, width=2)
-
-        # Map Grid
-        for i in range(self.map_size + 1):
-            # vertical lines
-            pygame.draw.line(
-                canvas,
-                (50, 50, 50),
-                (i * pix_square_size, 0),
-                (i * pix_square_size, self.render_window_size),
-                width=1,
-            )
-            # horizontal lines
-            pygame.draw.line(
-                canvas,
-                (50, 50, 50),
-                (0, i * pix_square_size),
-                (self.render_window_size, i * pix_square_size),
-                width=1,
-            )
+            pygame.draw.rect(canvas, (0, 255, 0), rect, width=1)
 
         self.window.blit(canvas, canvas.get_rect())
         pygame.event.pump()
