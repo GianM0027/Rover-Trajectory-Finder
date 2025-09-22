@@ -14,7 +14,8 @@ grid_mars_env = GridMarsEnv(dtm_file,
                             map_size=100,
                             fov_distance=10,
                             rover_max_step=1,
-                            rover_max_drop=1)
+                            rover_max_drop=1,
+                            rover_max_number_of_steps=1000)
 obs, info = grid_mars_env.reset()
 
 terminated = False

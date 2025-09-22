@@ -204,6 +204,7 @@ class GridMarsEnv(gym.Env):
 
         if self.rover_max_number_of_steps == 0:
             truncated = True
+            terminated = True
 
         # Current reward
         reward = self._compute_reward(terminated, truncated)
@@ -217,22 +218,30 @@ class GridMarsEnv(gym.Env):
 
         if verbose:
             # todo: add other stuff for debugging purposes
+            print(f"Actions remained: {self.rover_max_number_of_steps}")
             print(f"Action Selected: {self._action_to_direction_string[action]}")
             print(f"Movement allowed: {self.current_move_allowed_flag}")
             #print(f"FOV mask: \n{self._fov_mask}")
+            print()
 
         return observation, reward, terminated, truncated, info
 
     def _compute_reward(self, terminated, truncated):
-        # penalize rover if it tried to perform an illegal action (e.g bump on a wall, jump too high, ...)
+        penalty = 0
+        reward = 0
 
         # todo: add intermediate penalties for visiting the same locations many times
-        penalty = 0
+        # penalize rover if it tried to perform an illegal action (e.g. bump on a wall, jump too high, ...)
         if not self.current_move_allowed_flag:
-            penalty = 0.1
+            penalty += 0.1
+
+        # penalize rover if it did not reach the target within the maximum number of steps
+        if truncated:
+            penalty += 0.5
 
         # todo: add intermediate rewards based on distance from target
-        reward = 1 if terminated else -0.5 if truncated else 0
+        if terminated and not truncated:
+            reward += 1
 
         return reward + penalty
 
