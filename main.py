@@ -4,7 +4,7 @@ from hirise_dtm import HiriseDTM
 from custom_environment import GridMarsEnv
 
 # todo: add seed for environment generation and initialization
-# todo: aggiungere massimo numero di step per episodio
+# todo: valuta se aggiungere un'ulteriore copia della mappa, che per ogni pixel "visto", tiene in memoria info sulla sua altitudine
 
 filepath = "DTMs/DTEEC_016460_2230_016170_2230_G01.IMG"
 dtm_file = HiriseDTM(filepath)

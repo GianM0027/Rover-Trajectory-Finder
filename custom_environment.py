@@ -114,6 +114,7 @@ class GridMarsEnv(gym.Env):
         self.rover_max_drop = rover_max_drop
         self.current_move_allowed_flag = True
         self.rover_max_number_of_steps = rover_max_number_of_steps
+        self.rover_steps_counter = 0
 
         # rendering parameters
         self.render_mode = render_mode
@@ -169,7 +170,7 @@ class GridMarsEnv(gym.Env):
         """
         # Map the discrete action (0-8) to a movement direction
         truncated = False
-        self.rover_max_number_of_steps -= 1
+        self.rover_steps_counter += 1
         direction = self._action_to_direction[action]
 
         # Boolean matrix 3x3 indicating which positions the agent can move to and which are forbidden (wall, big step, etc...)
@@ -202,7 +203,7 @@ class GridMarsEnv(gym.Env):
         # Check if agent reached the target
         terminated = np.array_equal(self._agent_relative_location, self._target_location)
 
-        if self.rover_max_number_of_steps == 0:
+        if self.rover_max_number_of_steps == self.rover_steps_counter:
             truncated = True
             terminated = True
 
@@ -210,7 +211,7 @@ class GridMarsEnv(gym.Env):
         reward = self._compute_reward(terminated, truncated)
 
         # todo: create an energy consumption mechanism depending on the slope.
-        #       E.g if last pixel was higher than current -> self.rover_max_number_of_steps -= 0.5 instead of 1
+        #       E.g if last pixel was higher than current -> self.rover_steps_counter += 0.5 instead of 1
 
         observation = self._get_obs()
         info = self._get_info()
@@ -218,9 +219,14 @@ class GridMarsEnv(gym.Env):
 
         if verbose:
             # todo: add other stuff for debugging purposes
-            print(f"Actions remained: {self.rover_max_number_of_steps}")
+            print(f"Actions remained: {self.rover_max_number_of_steps-self.rover_steps_counter}")
             print(f"Action Selected: {self._action_to_direction_string[action]}")
             print(f"Movement allowed: {self.current_move_allowed_flag}")
+
+            if terminated:
+                print("The Rover reached its goal. Simulation concluded")
+            if truncated:
+                print(f"The Rover have not reached its goal withing {self.rover_max_number_of_steps} steps. Simulation concluded")
             #print(f"FOV mask: \n{self._fov_mask}")
             print()
 
