@@ -21,4 +21,3 @@ terminated = False
 while not terminated:
     action = np.random.randint(8)
     observation, reward, terminated, truncated, info = grid_mars_env.step(action, verbose=True)
-    time.sleep(0.5)

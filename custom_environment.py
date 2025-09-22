@@ -193,7 +193,6 @@ class GridMarsEnv(gym.Env):
         else:
             # Movement forbidden: stay in place.
             self.current_move_allowed_flag = False
-            # todo: maybe add a small penalty for when the agent tries an illegal action like bumping on an obstacle/wall
             pass
 
         # Global position and mask update
@@ -206,11 +205,11 @@ class GridMarsEnv(gym.Env):
         if self.rover_max_number_of_steps == 0:
             truncated = True
 
-        # Simple reward structure: +1 for reaching target, 0 otherwise
-        # todo: create a better reward model
-        reward = 1 if terminated else -0.5 if truncated else 0
+        # Current reward
+        reward = self._compute_reward(terminated, truncated)
 
-        # todo: create an energy consumption mechanism depending on the slope
+        # todo: create an energy consumption mechanism depending on the slope.
+        #       E.g if last pixel was higher than current -> self.rover_max_number_of_steps -= 0.5 instead of 1
 
         observation = self._get_obs()
         info = self._get_info()
@@ -224,6 +223,19 @@ class GridMarsEnv(gym.Env):
 
         return observation, reward, terminated, truncated, info
 
+    def _compute_reward(self, terminated, truncated):
+        # penalize rover if it tried to perform an illegal action (e.g bump on a wall, jump too high, ...)
+
+        # todo: add intermediate penalties for visiting the same locations many times
+        penalty = 0
+        if not self.current_move_allowed_flag:
+            penalty = 0.1
+
+        # todo: add intermediate rewards based on distance from target
+        reward = 1 if terminated else -0.5 if truncated else 0
+
+        return reward + penalty
+
     def render(self):
         if self.render_mode == "human":
             self.render_pygame()
@@ -233,20 +245,42 @@ class GridMarsEnv(gym.Env):
             pass
 
     def render_pygame(self):
-        # todo: aggiungere una versione velocizzata per la simulazione
-        # todo: fix render bug for big maps
         if self.window is None:
             pygame.init()
             pygame.display.init()
             self.window = pygame.display.set_mode((self.render_window_size, self.render_window_size))
+            pygame.display.set_caption("GridMarsEnv")
         if self.clock is None:
             self.clock = pygame.time.Clock()
 
+        # --- Handle events ---
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                exit()
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_q:  # Quit
+                    pygame.quit()
+                    exit()
+                elif event.key == pygame.K_p:  # Pause
+                    paused = True
+                    while paused:
+                        for e in pygame.event.get():
+                            if e.type == pygame.KEYDOWN and e.key == pygame.K_p:
+                                paused = False
+                        self.clock.tick(10)
+                elif event.key == pygame.K_y:  # Speed up toggle
+                    if hasattr(self, "_fast_mode"):
+                        self._fast_mode = not self._fast_mode
+                    else:
+                        self._fast_mode = True
+
+        # --- Drawing the environment ---
         canvas = pygame.Surface((self.render_window_size, self.render_window_size))
         canvas.fill((255, 255, 255))
         pix_square_size = self.render_window_size // self.map_size
 
-        # Map drown according to altitudes (grayscale)
+        # Draw map (altitudes as grayscale)
         min_alt, max_alt = np.nanmin(self._local_map), np.nanmax(self._local_map)
         norm = (self._local_map - min_alt) / (max_alt - min_alt + 1e-9)
 
@@ -254,84 +288,78 @@ class GridMarsEnv(gym.Env):
             for x in range(self.map_size):
                 val = norm[y, x]
                 color = (int(255 * (1 - val)), int(255 * (1 - val)), int(255 * (1 - val)))
-                rect = pygame.Rect(
-                    x * pix_square_size,
-                    y * pix_square_size,
-                    pix_square_size,
-                    pix_square_size,
-                )
+                rect = pygame.Rect(x * pix_square_size, y * pix_square_size, pix_square_size, pix_square_size)
                 pygame.draw.rect(canvas, color, rect)
 
-        # Target
+        # Draw target
         ty, tx = self._target_location
-        pygame.draw.rect(
-            canvas,
-            (255, 0, 0),
-            pygame.Rect(
-                tx * pix_square_size,
-                ty * pix_square_size,
-                pix_square_size,
-                pix_square_size,
-            ),
-        )
+        pygame.draw.rect(canvas, (255, 0, 0),
+                         pygame.Rect(tx * pix_square_size, ty * pix_square_size, pix_square_size, pix_square_size))
 
-        # Agent
+        # Draw agent
         ay, ax = self._agent_relative_location
-        pygame.draw.circle(
-            canvas,
-            (0, 0, 255),
-            (int((ax + 0.5) * pix_square_size), int((ay + 0.5) * pix_square_size)),
-            pix_square_size / 3,
-        )
+        pygame.draw.circle(canvas, (0, 0, 255), (int((ax + 0.5) * pix_square_size), int((ay + 0.5) * pix_square_size)),
+                           pix_square_size // 3)
 
-        # Highlighted and hidden in FOV
-        for (fy, fx) in self._fov_coordinates:
+        # Draw FOV highlights
+        for fy, fx in self._fov_coordinates:
             rel_idx = np.array([fy, fx]) - np.array(self._agent_relative_location)
             fov_idx = rel_idx + np.array([self._fov_distance, self._fov_distance])
 
             if 0 <= fov_idx[0] < self._fov_mask.shape[0] and 0 <= fov_idx[1] < self._fov_mask.shape[1]:
+                rect = pygame.Rect(fx * pix_square_size, fy * pix_square_size, pix_square_size, pix_square_size)
                 if self._fov_mask[tuple(fov_idx)]:
-                    rect = pygame.Rect(
-                        fx * pix_square_size,
-                        fy * pix_square_size,
-                        pix_square_size,
-                        pix_square_size,
-                    )
                     pygame.draw.rect(canvas, (0, 255, 0), rect, width=1)
                 else:
-                    rect = pygame.Rect(
-                        fx * pix_square_size,
-                        fy * pix_square_size,
-                        pix_square_size,
-                        pix_square_size,
-                    )
                     pygame.draw.rect(canvas, (255, 0, 0), rect, width=1)
 
+        # Draw legend with semi-transparent background
+        font = pygame.font.SysFont("Arial", 16)
+        legend_texts = [
+            "P = Pause - Q = Quit - Y = Speed Up"
+        ]
+
+        # Calculate size of the legend box
+        legend_width = max(font.size(text)[0] for text in legend_texts) + 10
+        legend_height = len(legend_texts) * 20 + 10
+
+        # Create a semi-transparent surface for the legend
+        legend_surface = pygame.Surface((legend_width, legend_height), pygame.SRCALPHA)
+        legend_surface.fill((255, 255, 255, 180))  # White with alpha 180 (semi-transparent)
+
+        # Blit text onto the legend surface
+        for i, text in enumerate(legend_texts):
+            label = font.render(text, True, (0, 0, 0))
+            legend_surface.blit(label, (5, 5 + i * 20))
+
+        # Blit the legend onto the main canvas
+        canvas.blit(legend_surface, (5, 5))
+
         self.window.blit(canvas, canvas.get_rect())
-        pygame.event.pump()
         pygame.display.update()
-        self.clock.tick(30)  # FPS
+
+        # Adjust FPS
+        fps = 60 if getattr(self, "_fast_mode", False) else 5
+        self.clock.tick(fps)
 
     def render_ascii(self):
         """
         Render the environment for human viewing.
         """
-
-        if self.render_mode == "human":
-            # Print a simple ASCII representation
-            for y in range(self.map_size):
-                row = ""
-                for x in range(self.map_size):
-                    if np.array_equal([y, x], self._agent_relative_location):
-                        row += "A "  # Agent
-                    elif np.array_equal([y, x], self._target_location):
-                        row += "T "  # Target
-                    elif (y, x) in self._fov_coordinates:
-                        row += "* "  # Agent FOV
-                    else:
-                        row += ". "  # Empty
-                print(row)
-            print()
+        # Print a simple ASCII representation
+        for y in range(self.map_size):
+            row = ""
+            for x in range(self.map_size):
+                if np.array_equal([y, x], self._agent_relative_location):
+                    row += "A "  # Agent
+                elif np.array_equal([y, x], self._target_location):
+                    row += "T "  # Target
+                elif (y, x) in self._fov_coordinates:
+                    row += "* "  # Agent FOV
+                else:
+                    row += ". "  # Empty
+            print(row)
+        print()
 
     def _update_fov_coordinates(self):
         agent_y, agent_x = self._agent_relative_location
@@ -393,7 +421,6 @@ class GridMarsEnv(gym.Env):
 
         :return: Debugging info that will be returned from the reset() and step() methods.
         """
-        # todo: return additional information if needed
         return {
             "distance": np.linalg.norm(self._agent_relative_location - self._target_location, ord=1),
             "agent_relative_position": self._agent_relative_location,
