@@ -47,14 +47,58 @@ class HiriseDTM:
         # return image portion and its coordinates as (row,column)=(y,x)
         return image_subset, (y, x)
 
-    def get_fov_mask(self, position, fov_distance):
-        # todo: metodo che dato un punto di coordinate (y,x) restituisce la matrice booleana che evidenzia i pixel che
-        #       il rover vede da quella posizione
+    @classmethod
+    def _which_pixels_are_visible(cls, altitudes):
+        """
+        Given a line of pixels of length "fov_distance", where the rover stands in the first one,
+        compute which ones are visible from there.
+        """
+        visibles = [False] * len(altitudes)
+        visibles[0] = True  # rover sees the pixel it's in
 
-        # todo: se il rover è molto vicino al bordo della mappa, può essere che il
-        mask_size = (fov_distance*2)+1
+        rover_altitude = altitudes[0]
+        max_slope = float("-inf")
 
-        return np.ones((mask_size, mask_size))
+        for distance in range(1, len(altitudes)):
+            if altitudes[distance] == np.inf:
+                visibles[distance] = True
+                continue
+
+            slope = (altitudes[distance] - rover_altitude) / distance
+            if slope >= max_slope:
+                visibles[distance] = True
+                max_slope = slope
+
+        return visibles
+
+    def get_fov_mask(self, position, fov_distance, action_to_direction):
+        mask_size = (fov_distance * 2) + 1
+        fov_mask = np.zeros((mask_size, mask_size))
+
+        center = np.array([fov_distance, fov_distance])
+
+        for _, action_direction in action_to_direction.items():
+            idx_list = []
+            for distance in range(fov_distance + 1):
+                idx = np.array(position) + action_direction * distance
+
+                # map borders control
+                if not (0 <= idx[0] < self.numpy_image.shape[0] and 0 <= idx[1] < self.numpy_image.shape[1]):
+                    break
+                idx_list.append(idx)
+
+            if not idx_list:
+                continue
+
+            altitudes = [self.numpy_image[tuple(idx)] for idx in idx_list]
+            visible_pixels = self._which_pixels_are_visible(altitudes)
+
+            for idx, visible_pixel in zip(idx_list, visible_pixels):
+                idx_to_update = center + (idx - position)
+                if 0 <= idx_to_update[0] < mask_size and 0 <= idx_to_update[1] < mask_size:
+                    fov_mask[tuple(idx_to_update)] = visible_pixel
+
+        return fov_mask
 
     def get_possible_moves(self, position, moves, max_step, max_drop):
         """
@@ -100,8 +144,7 @@ class HiriseDTM:
         :param figsize: plot figure map_size.
         Shows the DTM numpy_image in a matplotlib figure.
         """
-        # todo: migliorare la funzione di plot per essere più nitida, ma anche per plottare una sezione della mappa invece
-        #       della mappa intera
+        # todo: plottare una sezione della mappa invece della mappa intera
         plt.figure(figsize=figsize)
         plt.imshow(self.numpy_image, cmap="terrain")
         plt.colorbar(label="Elevation (m)")

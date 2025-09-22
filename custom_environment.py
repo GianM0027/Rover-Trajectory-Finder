@@ -40,6 +40,7 @@ class GridMarsEnv(gym.Env):
                  render_mode: str = 'rgb_array',
                  rover_max_step=0.3,
                  rover_max_drop=0.5,
+                 rover_max_number_of_steps=1000,
                  render_window_size=512):
         # Retrieving min and max altitude from map
         self._dtm = dtm
@@ -60,6 +61,7 @@ class GridMarsEnv(gym.Env):
         # setting local map position to -1 as "uninitialized" state
         self._local_map_position = np.array([-1, -1], dtype=np.int32)
         self._local_map = np.zeros([map_size, map_size], dtype=np.float32)
+        self.visited_locations = np.zeros([map_size, map_size], dtype=np.float32)
 
         # Initialize agent field of view - will be properly set in reset()
         # setting mask to 0 as "uninitialized" state
@@ -74,7 +76,10 @@ class GridMarsEnv(gym.Env):
 
                 # matrix with field of view, along with the mask that states whether the agent can see that pixel
                 "local_fov_map": gym.spaces.Box(min_altitude, max_altitude, shape=(self._fov_matrix_size, self._fov_matrix_size), dtype=np.float32),
-                "fov_mask": gym.spaces.MultiBinary((self._fov_matrix_size, self._fov_matrix_size))
+                "fov_mask": gym.spaces.MultiBinary((self._fov_matrix_size, self._fov_matrix_size)),
+
+                # visited locations - +1 for each time that cell is visited
+                "visited_locations": gym.spaces.MultiBinary((self.map_size, self.map_size))
             }
         )
 
@@ -104,15 +109,14 @@ class GridMarsEnv(gym.Env):
             7: "left-up",
         }
 
-        # render mode for visualisation
-        self.render_mode = render_mode
-
-        # rover max jump and max drop
+        # rover max jump and max drop allowed
         self.rover_max_step = rover_max_step
         self.rover_max_drop = rover_max_drop
         self.current_move_allowed_flag = True
+        self.rover_max_number_of_steps = rover_max_number_of_steps
 
         # rendering parameters
+        self.render_mode = render_mode
         self.render_window_size = render_window_size
         self.window = None
         self.clock = None
@@ -134,12 +138,13 @@ class GridMarsEnv(gym.Env):
         # Randomly place the agent anywhere on the grid
         self._agent_relative_location = self.np_random.integers(0, self.map_size, size=2, dtype=int)
         self._update_fov_coordinates()
+        self._update_visited_locations()
 
         # Compute global position of agent
         self._agent_global_location = self._compute_agent_global_position()
 
         # Retrieve the mask corresponding to the visible areas given the global agent position
-        self._fov_mask = self._dtm.get_fov_mask(self._agent_global_location, self._fov_distance)
+        self._fov_mask = self._dtm.get_fov_mask(self._agent_global_location, self._fov_distance, self._action_to_direction)
 
         # Randomly place target, ensuring it is different from agent position
         self._target_location = self._agent_relative_location
@@ -163,6 +168,8 @@ class GridMarsEnv(gym.Env):
         :return: (observation, reward, terminated, truncated, info)
         """
         # Map the discrete action (0-8) to a movement direction
+        truncated = False
+        self.rover_max_number_of_steps -= 1
         direction = self._action_to_direction[action]
 
         # Boolean matrix 3x3 indicating which positions the agent can move to and which are forbidden (wall, big step, etc...)
@@ -182,6 +189,7 @@ class GridMarsEnv(gym.Env):
             )
             self._update_fov_coordinates()
             self.current_move_allowed_flag = True
+            self._update_visited_locations()
         else:
             # Movement forbidden: stay in place.
             self.current_move_allowed_flag = False
@@ -190,17 +198,17 @@ class GridMarsEnv(gym.Env):
 
         # Global position and mask update
         self._agent_global_location = self._compute_agent_global_position()
-        self._fov_mask = self._dtm.get_fov_mask(self._agent_global_location, self._fov_distance)
+        self._fov_mask = self._dtm.get_fov_mask(self._agent_global_location, self._fov_distance, self._action_to_direction)
 
         # Check if agent reached the target
         terminated = np.array_equal(self._agent_relative_location, self._target_location)
 
-        # todo: add truncation mechanism if required (simulation ends before rover reaches the goal because max_steps reached)
-        truncated = False
+        if self.rover_max_number_of_steps == 0:
+            truncated = True
 
         # Simple reward structure: +1 for reaching target, 0 otherwise
         # todo: create a better reward model
-        reward = 1 if terminated else 0
+        reward = 1 if terminated else -0.5 if truncated else 0
 
         # todo: create an energy consumption mechanism depending on the slope
 
@@ -212,6 +220,7 @@ class GridMarsEnv(gym.Env):
             # todo: add other stuff for debugging purposes
             print(f"Action Selected: {self._action_to_direction_string[action]}")
             print(f"Movement allowed: {self.current_move_allowed_flag}")
+            #print(f"FOV mask: \n{self._fov_mask}")
 
         return observation, reward, terminated, truncated, info
 
@@ -225,6 +234,7 @@ class GridMarsEnv(gym.Env):
 
     def render_pygame(self):
         # todo: aggiungere una versione velocizzata per la simulazione
+        # todo: fix render bug for big maps
         if self.window is None:
             pygame.init()
             pygame.display.init()
@@ -274,20 +284,33 @@ class GridMarsEnv(gym.Env):
             pix_square_size / 3,
         )
 
-        # Highlighted FOV
+        # Highlighted and hidden in FOV
         for (fy, fx) in self._fov_coordinates:
-            rect = pygame.Rect(
-                fx * pix_square_size,
-                fy * pix_square_size,
-                pix_square_size,
-                pix_square_size,
-            )
-            pygame.draw.rect(canvas, (0, 255, 0), rect, width=1)
+            rel_idx = np.array([fy, fx]) - np.array(self._agent_relative_location)
+            fov_idx = rel_idx + np.array([self._fov_distance, self._fov_distance])
+
+            if 0 <= fov_idx[0] < self._fov_mask.shape[0] and 0 <= fov_idx[1] < self._fov_mask.shape[1]:
+                if self._fov_mask[tuple(fov_idx)]:
+                    rect = pygame.Rect(
+                        fx * pix_square_size,
+                        fy * pix_square_size,
+                        pix_square_size,
+                        pix_square_size,
+                    )
+                    pygame.draw.rect(canvas, (0, 255, 0), rect, width=1)
+                else:
+                    rect = pygame.Rect(
+                        fx * pix_square_size,
+                        fy * pix_square_size,
+                        pix_square_size,
+                        pix_square_size,
+                    )
+                    pygame.draw.rect(canvas, (255, 0, 0), rect, width=1)
 
         self.window.blit(canvas, canvas.get_rect())
         pygame.event.pump()
         pygame.display.update()
-        self.clock.tick(1)  # FPS
+        self.clock.tick(30)  # FPS
 
     def render_ascii(self):
         """
@@ -356,8 +379,13 @@ class GridMarsEnv(gym.Env):
             "agent": self._agent_relative_location,
             "target": self._target_location,
             "local_fov_map": self._get_fov_altitudes(),
-            "mask": self._fov_mask
+            "mask": self._fov_mask,
+            "visited_locations": self.visited_locations
         }
+
+    def _update_visited_locations(self):
+        y, x = self._agent_relative_location
+        self.visited_locations[y, x] += 1
 
     def _get_info(self):
         """
