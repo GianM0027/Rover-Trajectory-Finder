@@ -165,6 +165,7 @@ class GridMarsEnv(gym.Env):
         Execute one timestep within the environment.
 
         :param action: The action to take (0-8 for directions)
+        :param verbose: (default: False) Print real-time information about the agent behavior.
 
         :return: (observation, reward, terminated, truncated, info)
         """

@@ -1,10 +1,11 @@
-import time
 import numpy as np
 from hirise_dtm import HiriseDTM
 from custom_environment import GridMarsEnv
 
-# todo: add seed for environment generation and initialization
 # todo: valuta se aggiungere un'ulteriore copia della mappa, che per ogni pixel "visto", tiene in memoria info sulla sua altitudine
+
+SEED = 42
+np.random.seed(SEED)
 
 filepath = "DTMs/DTEEC_016460_2230_016170_2230_G01.IMG"
 dtm_file = HiriseDTM(filepath)
@@ -16,7 +17,7 @@ grid_mars_env = GridMarsEnv(dtm_file,
                             rover_max_step=1,
                             rover_max_drop=1,
                             rover_max_number_of_steps=1000)
-obs, info = grid_mars_env.reset()
+obs, info = grid_mars_env.reset(seed=SEED)
 
 terminated = False
 while not terminated:
