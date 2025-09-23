@@ -12,8 +12,8 @@ dtm_file = HiriseDTM(filepath)
 
 grid_mars_env = GridMarsEnv(dtm_file,
                             render_mode="human",
-                            map_size=100,
-                            fov_distance=10,
+                            map_size=50,
+                            fov_distance=5,
                             rover_max_step=1,
                             rover_max_drop=1,
                             rover_max_number_of_steps=1000)

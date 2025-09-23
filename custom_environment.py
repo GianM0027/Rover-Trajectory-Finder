@@ -61,7 +61,9 @@ class GridMarsEnv(gym.Env):
         # setting local map position to -1 as "uninitialized" state
         self._local_map_position = np.array([-1, -1], dtype=np.int32)
         self._local_map = np.zeros([map_size, map_size], dtype=np.float32)
-        self.visited_locations = np.zeros([map_size, map_size], dtype=np.float32)
+
+        self.visited_locations = np.zeros([map_size, map_size], dtype=np.int32)               # how many times the agent visited that location
+        self._detected_altitudes = np.zeros([self.map_size, self.map_size], dtype=np.bool_)   # did the agent registered the altitude of that location?
 
         # Initialize agent field of view - will be properly set in reset()
         # setting mask to 0 as "uninitialized" state
@@ -74,12 +76,15 @@ class GridMarsEnv(gym.Env):
                 "agent": gym.spaces.Box(0, self.map_size - 1, shape=(2,), dtype=np.int32),    # [y, x] agent coordinates
                 "target": gym.spaces.Box(0, self.map_size - 1, shape=(2,), dtype=np.int32),   # [y, x] goal coordinates
 
-                # matrix with field of view, along with the mask that states whether the agent can see that pixel
-                "local_fov_map": gym.spaces.Box(min_altitude, max_altitude, shape=(self._fov_matrix_size, self._fov_matrix_size), dtype=np.float32),
+                # FOV maps info (what the agent sees)
+                "local_fov_values": gym.spaces.Box(min_altitude, max_altitude, shape=(self._fov_matrix_size, self._fov_matrix_size), dtype=np.float32),
+                "local_fov_positions": gym.spaces.Box(low=0, high=self.map_size-1, shape=(self._fov_matrix_size, self._fov_matrix_size, 2), dtype=np.int32),
                 "fov_mask": gym.spaces.MultiBinary((self._fov_matrix_size, self._fov_matrix_size)),
 
-                # visited locations - +1 for each time that cell is visited
-                "visited_locations": gym.spaces.MultiBinary((self.map_size, self.map_size))
+                # Local map info (the whole map where the agent is allowed to explore)
+                "local_map": gym.spaces.MultiBinary((self.map_size, self.map_size)),            # map the agent is exploring
+                "local_map_mask": gym.spaces.MultiBinary((self.map_size, self.map_size)),       # locations the agent saw
+                "visited_locations": gym.spaces.MultiBinary((self.map_size, self.map_size))     # location the agent stepped on
             }
         )
 
@@ -109,7 +114,7 @@ class GridMarsEnv(gym.Env):
             7: "left-up",
         }
 
-        # rover max jump and max drop allowed
+        # rover movements parameters
         self.rover_max_step = rover_max_step
         self.rover_max_drop = rover_max_drop
         self.current_move_allowed_flag = True
@@ -154,6 +159,7 @@ class GridMarsEnv(gym.Env):
                 0, self.map_size, size=2, dtype=int
             )
 
+        self._update_detected_altitudes()
         observation = self._get_obs()
         info = self._get_info()
         self.render()
@@ -191,7 +197,9 @@ class GridMarsEnv(gym.Env):
             )
             self._update_fov_coordinates()
             self.current_move_allowed_flag = True
+
             self._update_visited_locations()
+            self._update_detected_altitudes()
         else:
             # Movement forbidden: stay in place.
             self.current_move_allowed_flag = False
@@ -318,6 +326,10 @@ class GridMarsEnv(gym.Env):
                     color = (gray, gray, gray)
                 raw_surface.set_at((x, y), color)
 
+                # If visited, draw a light blue dot on location
+                if self.visited_locations[y, x] > 0:
+                    raw_surface.set_at((x, y), (173, 216, 230))
+
         # Scale terrain to window size (no gaps, no leftover border)
         canvas = pygame.transform.scale(raw_surface,
                                         (self.render_window_size, self.render_window_size))
@@ -407,7 +419,7 @@ class GridMarsEnv(gym.Env):
             for x in range(fov_x_low, fov_x_high + 1)
         ]
 
-    def _get_fov_altitudes(self):
+    def _get_fov_map_w_altitudes(self):
         rows, cols = zip(*self._fov_coordinates)
         row_min, row_max = min(rows), max(rows) + 1
         col_min, col_max = min(cols), max(cols) + 1
@@ -423,7 +435,25 @@ class GridMarsEnv(gym.Env):
         while fov_values.shape[1] < target_size:
             fov_values = np.hstack([fov_values, np.full((fov_values.shape[0], 1), np.inf)])
 
-        return fov_values
+        # Create a matrix of positions
+        fov_positions = np.empty(fov_values.shape, dtype=object)
+        for i in range(fov_values.shape[0]):
+            for j in range(fov_values.shape[1]):
+                fov_positions[i, j] = (row_min + i, col_min + j)
+
+        return fov_values, fov_positions
+
+    def _update_detected_altitudes(self):
+        local_fov_values, local_fov_positions = self._get_fov_map_w_altitudes()
+
+        seen_altitudes_values = local_fov_values[self._fov_mask.astype(np.bool)]
+        seen_altitudes_positions = local_fov_positions[self._fov_mask.astype(np.bool)]
+
+        for altitude, position in zip(seen_altitudes_values, seen_altitudes_positions):
+            y, x = position
+            y = min(max(y, 0), self.map_size - 1)
+            x = min(max(x, 0), self.map_size - 1)
+            self._detected_altitudes[y, x] = 1
 
     def _compute_agent_global_position(self):
         # local map position in (width,height) format + agent location in (y,x) format
@@ -435,12 +465,20 @@ class GridMarsEnv(gym.Env):
 
         :return: Observation with agent and target positions
         """
+        local_fov_values, local_fov_positions = self._get_fov_map_w_altitudes()
         return {
-            "agent": self._agent_relative_location,
-            "target": self._target_location,
-            "local_fov_map": self._get_fov_altitudes(),
-            "mask": self._fov_mask,
-            "visited_locations": self.visited_locations
+            "agent": self._agent_relative_location,         # [y, x] agent relative coordinates
+            "target": self._target_location,                # [y, x] target relative coordinates
+
+            # fov information
+            "local_fov_values": local_fov_values,           # all altitudes in FOV
+            "local_fov_positions": local_fov_positions,     # coordinates of FOV with local map as reference system (not global)
+            "fov_mask": self._fov_mask.astype(np.bool),     # boolean mask indicating which pixels are visible to the agent within the FOV
+
+            # local map information
+            "local_map": self._local_map,                                   # Entire local map where the agent is moving (not global)
+            "visited_locations": self.visited_locations,                    # Integer matrix indicating the number of times the agent stepped on that location
+            "local_map_mask": self._detected_altitudes.astype(np.bool),     # Boolean matrix indicating which locations the agent has seen so far (not necessarily stepped on)
         }
 
     def _update_visited_locations(self):
