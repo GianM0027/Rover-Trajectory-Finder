@@ -261,6 +261,7 @@ class GridMarsEnv(gym.Env):
             pass
 
     def render_pygame(self):
+        # todo: renderizza con pallino rosso le locazioni già visitate
         if self.window is None:
             pygame.init()
             pygame.display.init()
@@ -282,8 +283,15 @@ class GridMarsEnv(gym.Env):
                     paused = True
                     while paused:
                         for e in pygame.event.get():
-                            if e.type == pygame.KEYDOWN and e.key == pygame.K_p:
-                                paused = False
+                            if e.type == pygame.QUIT:
+                                pygame.quit()
+                                exit()
+                            if e.type == pygame.KEYDOWN:
+                                if e.key == pygame.K_p:
+                                    paused = False
+                                elif e.key == pygame.K_q:
+                                    pygame.quit()
+                                    exit()
                         self.clock.tick(10)
                 elif event.key == pygame.K_y:  # Speed up toggle
                     if hasattr(self, "_fast_mode"):
@@ -291,70 +299,78 @@ class GridMarsEnv(gym.Env):
                     else:
                         self._fast_mode = True
 
-        # --- Drawing the environment ---
-        canvas = pygame.Surface((self.render_window_size, self.render_window_size))
-        canvas.fill((255, 255, 255))
-        pix_square_size = self.render_window_size // self.map_size
+        # --- Draw terrain into a raw map surface ---
+        finite_map = np.where(np.isfinite(self._local_map), self._local_map, np.nan)
+        min_alt, max_alt = np.nanmin(finite_map), np.nanmax(finite_map)
 
-        # Draw map (altitudes as grayscale)
-        min_alt, max_alt = np.nanmin(self._local_map), np.nanmax(self._local_map)
-        norm = (self._local_map - min_alt) / (max_alt - min_alt + 1e-9)
+        # Normalize safely
+        norm = (finite_map - min_alt) / (max_alt - min_alt + 1e-9)
+        norm = np.nan_to_num(norm, nan=0.5)
+        norm = np.clip(norm, 0.0, 1.0)
 
+        raw_surface = pygame.Surface((self.map_size, self.map_size))
         for y in range(self.map_size):
             for x in range(self.map_size):
-                val = norm[y, x]
-                color = (int(255 * (1 - val)), int(255 * (1 - val)), int(255 * (1 - val)))
-                rect = pygame.Rect(x * pix_square_size, y * pix_square_size, pix_square_size, pix_square_size)
-                pygame.draw.rect(canvas, color, rect)
+                if np.isinf(self._local_map[y, x]):
+                    color = (0, 0, 0)  # very high wall
+                else:
+                    gray = int(255 * (1 - norm[y, x]))
+                    color = (gray, gray, gray)
+                raw_surface.set_at((x, y), color)
 
-        # Draw target
+        # Scale terrain to window size (no gaps, no leftover border)
+        canvas = pygame.transform.scale(raw_surface,
+                                        (self.render_window_size, self.render_window_size))
+
+        pix_square_size = self.render_window_size / self.map_size
+
+        # --- Draw target ---
         ty, tx = self._target_location
         pygame.draw.rect(canvas, (255, 0, 0),
-                         pygame.Rect(tx * pix_square_size, ty * pix_square_size, pix_square_size, pix_square_size))
+                         pygame.Rect(tx * pix_square_size, ty * pix_square_size,
+                                     pix_square_size, pix_square_size))
 
-        # Draw agent
+        # --- Draw agent ---
         ay, ax = self._agent_relative_location
-        pygame.draw.circle(canvas, (0, 0, 255), (int((ax + 0.5) * pix_square_size), int((ay + 0.5) * pix_square_size)),
-                           pix_square_size // 3)
+        pygame.draw.circle(canvas, (0, 0, 255),
+                           (int((ax + 0.5) * pix_square_size),
+                            int((ay + 0.5) * pix_square_size)),
+                           int(pix_square_size // 3))
 
-        # Draw FOV highlights
+        # --- Draw FOV highlights ---
         for fy, fx in self._fov_coordinates:
             rel_idx = np.array([fy, fx]) - np.array(self._agent_relative_location)
             fov_idx = rel_idx + np.array([self._fov_distance, self._fov_distance])
 
-            if 0 <= fov_idx[0] < self._fov_mask.shape[0] and 0 <= fov_idx[1] < self._fov_mask.shape[1]:
-                rect = pygame.Rect(fx * pix_square_size, fy * pix_square_size, pix_square_size, pix_square_size)
+            if (0 <= fov_idx[0] < self._fov_mask.shape[0] and
+                    0 <= fov_idx[1] < self._fov_mask.shape[1]):
+                rect = pygame.Rect(fx * pix_square_size, fy * pix_square_size,
+                                   pix_square_size, pix_square_size)
                 if self._fov_mask[tuple(fov_idx)]:
                     pygame.draw.rect(canvas, (0, 255, 0), rect, width=1)
                 else:
                     pygame.draw.rect(canvas, (255, 0, 0), rect, width=1)
 
-        # Draw legend with semi-transparent background
+        # --- Draw legend with semi-transparent background ---
         font = pygame.font.SysFont("Arial", 16)
-        legend_texts = [
-            "P = Pause - Q = Quit - Y = Speed Up"
-        ]
+        legend_texts = ["P = Pause - Q = Quit - Y = Speed Up"]
 
-        # Calculate size of the legend box
         legend_width = max(font.size(text)[0] for text in legend_texts) + 10
         legend_height = len(legend_texts) * 20 + 10
-
-        # Create a semi-transparent surface for the legend
         legend_surface = pygame.Surface((legend_width, legend_height), pygame.SRCALPHA)
-        legend_surface.fill((255, 255, 255, 180))  # White with alpha 180 (semi-transparent)
+        legend_surface.fill((255, 255, 255, 180))  # white with alpha = 180
 
-        # Blit text onto the legend surface
         for i, text in enumerate(legend_texts):
             label = font.render(text, True, (0, 0, 0))
             legend_surface.blit(label, (5, 5 + i * 20))
 
-        # Blit the legend onto the main canvas
         canvas.blit(legend_surface, (5, 5))
 
+        # --- Push canvas to window ---
         self.window.blit(canvas, canvas.get_rect())
         pygame.display.update()
 
-        # Adjust FPS
+        # --- Adjust FPS ---
         fps = 60 if getattr(self, "_fast_mode", False) else 5
         self.clock.tick(fps)
 
