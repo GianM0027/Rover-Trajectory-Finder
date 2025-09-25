@@ -139,14 +139,16 @@ class HiriseDTM:
     def get_lowest_highest_altitude(self):
         return np.nanmin(self.numpy_image), np.nanmax(self.numpy_image)
 
-    def plot_dtm(self, figsize: Tuple = (12, 12)) -> None:
+    def plot_dtm(self, dtm = None, figsize: Tuple = (12, 12)) -> None:
         """
+        :param dtm: dtm to plot (optional), if set to None, the whole map will be plotted.
         :param figsize: plot figure map_size.
+
         Shows the DTM numpy_image in a matplotlib figure.
         """
-        # todo: plottare una sezione della mappa invece della mappa intera
+        img_to_plot = dtm if dtm else self.numpy_image
         plt.figure(figsize=figsize)
-        plt.imshow(self.numpy_image, cmap="terrain")
+        plt.imshow(img_to_plot, cmap="terrain")
         plt.colorbar(label="Elevation (m)")
         plt.title("HiRISE DTM")
         plt.show()

@@ -2,8 +2,6 @@ import numpy as np
 from hirise_dtm import HiriseDTM
 from custom_environment import GridMarsEnv
 
-# todo: valuta se aggiungere un'ulteriore copia della mappa, che per ogni pixel "visto", tiene in memoria info sulla sua altitudine
-
 SEED = 42
 np.random.seed(SEED)
 
