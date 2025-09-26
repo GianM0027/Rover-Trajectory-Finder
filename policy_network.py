@@ -1,9 +1,9 @@
 import torch
 
 
-class policy_network(torch.nn.Module):
+class PolicyNetwork(torch.nn.Module):
     def __init__(self, n_actions=8):
-        super(policy_network, self).__init__()
+        super(PolicyNetwork, self).__init__()
 
         # todo: implementare la CNN con le seguenti restrizioni:
         #       .
@@ -22,6 +22,8 @@ class policy_network(torch.nn.Module):
         pass
 
     def forward(self, args):
+        # todo: restituisci l'azione come array di probabilità (usa softmax)
+        # todo: restituisci il value come logit
         pass
 
     def fit(self, minibatch, loss, epochs_per_minibatch=1):
