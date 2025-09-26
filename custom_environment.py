@@ -29,6 +29,7 @@ class GridMarsEnv(gym.Env):
                         If set to "human", graphic rendering is performed by using pygame (does not work on Jupyter notebooks).
                         If set to "ascii", graphic rendering is performed by using ascii.
                         Otherwise, no rendering is performed.
+    :param draw_visited_locations: when render_mode is set to human. This flag sets whether to draw visited locations on the map.
     :param rover_max_step: maximum obstacle height the rover can overcome when moving on the map.
     :param rover_max_drop: maximum drop the rover can overcome when moving on the map.
     :param render_window_size: window size for the rendering of the environment when render_mode="human".
@@ -38,6 +39,7 @@ class GridMarsEnv(gym.Env):
                  map_size: int = 200,
                  fov_distance: int = 20,
                  render_mode: str = 'rgb_array',
+                 draw_visited_locations: bool = False,
                  rover_max_step=0.3,
                  rover_max_drop=0.5,
                  rover_max_number_of_steps=1000,
@@ -124,6 +126,7 @@ class GridMarsEnv(gym.Env):
         # rendering parameters
         self.render_mode = render_mode
         self.render_window_size = render_window_size
+        self.draw_visited_locations = draw_visited_locations
         self.window = None
         self.clock = None
 
@@ -269,7 +272,6 @@ class GridMarsEnv(gym.Env):
             pass
 
     def render_pygame(self):
-        # todo: renderizza con pallino rosso le locazioni già visitate
         if self.window is None:
             pygame.init()
             pygame.display.init()
@@ -327,7 +329,7 @@ class GridMarsEnv(gym.Env):
                 raw_surface.set_at((x, y), color)
 
                 # If visited, draw a light blue dot on location
-                if self.visited_locations[y, x] > 0:
+                if self.visited_locations[y, x] > 0 and self.draw_visited_locations:
                     raw_surface.set_at((x, y), (173, 216, 230))
 
         # Scale terrain to window size (no gaps, no leftover border)
