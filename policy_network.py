@@ -23,3 +23,10 @@ class policy_network(torch.nn.Module):
         #todo: dati i parametri della funzione, esegui l'aggiornamento dei pesi della rete poi resituisci il valore delle loss per ogni minibatch
         loss_values = []
         return loss_values
+
+    def save_weights(self, path):
+        pass
+
+    def load_weights(self, path):
+        # todo: questo va fatto "inplace" -> questo metodo non restituisce nulla.
+        pass
