@@ -5,6 +5,8 @@ import rasterio
 from typing import Tuple, Dict
 from matplotlib import pyplot as plt
 
+plt.style.use('default')  # Stile classico con sfondo bianco
+
 
 class HiriseDTM:
     """
