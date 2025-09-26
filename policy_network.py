@@ -14,7 +14,7 @@ class policy_network(torch.nn.Module):
         #       - Una delle 8 possibili azioni (0-7)
         #       - Un float restituito come logit. Questo rappresenta il "vantaggio" di usare l'azione restituita dall'altra testa.
 
-    def preprocess(self, x):
+    def normalize(self, x):
         # todo:
         #   - La normalizzazione delle altimetrie (canale 0) va fatta con minmax (ignorando i np.NaN)
         #   - La normalizzazione del counter (canale 1) va fatto con log(1 + x)
