@@ -1,7 +1,6 @@
 import os
-
-import numpy as np
 import rasterio
+import numpy as np
 from typing import Tuple, Dict
 from matplotlib import pyplot as plt
 
@@ -30,45 +29,128 @@ class HiriseDTM:
         self.file_name = os.path.split(img_path)[-1].replace(".IMG", "")
         self.metadata = self._get_metadata()
 
-    def get_portion_of_map(self, size):
-        # todo: metodo che estrae una sezione dell'immagine di grandezza (size x size), evitando i np.inf
-        # todo: il metodo restituisce anche le coordinate top-left dalle quali è stata ricavata la porzione di mappa
-        #       IMPORTANTE: la top left position è una tupla (x, y) dove x è la colonna e y è la riga, non viceversa
+    def get_portion_of_map(self, size, max_percentage_inf=0.2):
+        # Extracts a size x size portion of the image, avoiding too many np.inf
+        img_height, img_width = self.numpy_image.shape[:2]
 
-        return np.zeros((size, size)), (0, 0)
+        while True:
+            # pick random top-left corner
+            x = np.random.randint(0, img_width - size + 1)
+            y = np.random.randint(0, img_height - size + 1)
 
-    def get_fov_mask(self, position, fov_distance):
-        # todo: metodo che dato un punto di coordinate (x,y) restituisce la matrice booleana che evidenzia i pixel che
-        #       il rover vede da quella posizione
+            # extract portion
+            image_subset = self.numpy_image[y:y + size, x:x + size]
 
-        # todo: se il rover è molto vicino al bordo della mappa, può essere che il
-        mask_size = (fov_distance*2)+1
+            # count infinities
+            num_inf = np.sum(np.isinf(image_subset))
+            if num_inf < max_percentage_inf * (size * size):
+                break
 
-        return np.ones((mask_size, mask_size))
+        # return image portion and its coordinates as (row,column)=(y,x)
+        return image_subset, (y, x)
 
-    def get_possible_moves(self, position):
-        # todo: metodo che dato un punto di coordinate (x,y) restituisce la matrice booleana che evidenzia i pixel su cui
-        #       il rover può spostarsi da quella posizione.
-        #       Per esempio:
-        #       - Se a destra l'elevazione è di poco minore di quella su cui si trova il rover, allora ci si può spostare
-        #       - Se a sinistra c'è una forte elevazione rispetto a dove sta il rover (un muro) allora non ci si può spostare
-        #       - E così via... Alla fine avremo una matrice 3x3 booleana che indica se il rover può spostarsi di una posizione
-        #         su quel pixel (1) oppure no (0)
+    @classmethod
+    def _which_pixels_are_visible(cls, altitudes):
+        """
+        Given a line of pixels of length "fov_distance", where the rover stands in the first one,
+        compute which ones are visible from there.
+        """
+        visibles = [False] * len(altitudes)
+        visibles[0] = True  # rover sees the pixel it's in
 
-        return np.ones((3, 3))
+        rover_altitude = altitudes[0]
+        max_slope = float("-inf")
+
+        for distance in range(1, len(altitudes)):
+            if altitudes[distance] == np.inf:
+                visibles[distance] = True
+                continue
+
+            slope = (altitudes[distance] - rover_altitude) / distance
+            if slope >= max_slope:
+                visibles[distance] = True
+                max_slope = slope
+
+        return visibles
+
+    def get_fov_mask(self, position, fov_distance, action_to_direction):
+        mask_size = (fov_distance * 2) + 1
+        fov_mask = np.zeros((mask_size, mask_size))
+
+        center = np.array([fov_distance, fov_distance])
+
+        for _, action_direction in action_to_direction.items():
+            idx_list = []
+            for distance in range(fov_distance + 1):
+                idx = np.array(position) + action_direction * distance
+
+                # map borders control
+                if not (0 <= idx[0] < self.numpy_image.shape[0] and 0 <= idx[1] < self.numpy_image.shape[1]):
+                    break
+                idx_list.append(idx)
+
+            if not idx_list:
+                continue
+
+            altitudes = [self.numpy_image[tuple(idx)] for idx in idx_list]
+            visible_pixels = self._which_pixels_are_visible(altitudes)
+
+            for idx, visible_pixel in zip(idx_list, visible_pixels):
+                idx_to_update = center + (idx - position)
+                if 0 <= idx_to_update[0] < mask_size and 0 <= idx_to_update[1] < mask_size:
+                    fov_mask[tuple(idx_to_update)] = visible_pixel
+
+        return fov_mask
+
+    def get_possible_moves(self, position, moves, max_step, max_drop):
+        """
+        Given a point (y, x), returns a 3x3 boolean matrix of possible moves.
+        - 1 = rover can move there
+        - 0 = rover cannot move there
+        """
+        possible_moves = np.ones((3, 3), dtype=bool)
+        y, x = position
+        current_altitude = self.numpy_image[y, x]
+
+        for _, move in moves.items():
+            moves_idx = np.array((1, 1)) + move         # map move to 3x3 possible_moves matrix index
+            new_y, new_x = np.array(position) + move
+
+            # Out of bounds check
+            if not (0 <= new_y < self.numpy_image.shape[0] and 0 <= new_x < self.numpy_image.shape[1]):
+                possible_moves[moves_idx[0], moves_idx[1]] = 0
+                continue
+
+            new_altitude = self.numpy_image[new_y, new_x]
+
+            # Invalid terrain
+            if new_altitude == np.inf:
+                possible_moves[moves_idx[0], moves_idx[1]] = 0
+                continue
+
+            # Too steep to climb
+            if new_altitude - current_altitude > max_step:
+                possible_moves[moves_idx[0], moves_idx[1]] = 0
+
+            # Too steep downward drop
+            if current_altitude - new_altitude > max_drop:
+                possible_moves[moves_idx[0], moves_idx[1]] = 0
+
+        return possible_moves
 
     def get_lowest_highest_altitude(self):
         return np.nanmin(self.numpy_image), np.nanmax(self.numpy_image)
 
-    def plot_dtm(self, figsize: Tuple = (12, 12)) -> None:
+    def plot_dtm(self, dtm = None, figsize: Tuple = (12, 12)) -> None:
         """
+        :param dtm: dtm to plot (optional), if set to None, the whole map will be plotted.
         :param figsize: plot figure map_size.
+
         Shows the DTM numpy_image in a matplotlib figure.
         """
-        # todo: migliorare la funzione di plot per essere più nitida, ma anche per plottare una sezione della mappa invece
-        #       della mappa intera
+        img_to_plot = dtm if dtm else self.numpy_image
         plt.figure(figsize=figsize)
-        plt.imshow(self.numpy_image, cmap="terrain")
+        plt.imshow(img_to_plot, cmap="terrain")
         plt.colorbar(label="Elevation (m)")
         plt.title("HiRISE DTM")
         plt.show()
