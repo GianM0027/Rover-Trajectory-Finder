@@ -1,6 +1,7 @@
 import numpy as np
 from hirise_dtm import HiriseDTM
 from custom_environment import GridMarsEnv
+from agent import Agent
 
 SEED = 42
 np.random.seed(SEED)
@@ -10,14 +11,11 @@ dtm_file = HiriseDTM(filepath)
 
 grid_mars_env = GridMarsEnv(dtm_file,
                             render_mode="human",
-                            map_size=50,
-                            fov_distance=5,
+                            map_size=10,
+                            fov_distance=2,
                             rover_max_step=1,
                             rover_max_drop=1,
-                            rover_max_number_of_steps=1000)
-obs, info = grid_mars_env.reset(seed=SEED)
+                            rover_max_number_of_steps=15)
 
-terminated = False
-while not terminated:
-    action = np.random.randint(8)
-    observation, reward, terminated, truncated, info = grid_mars_env.step(action, verbose=True)
+agent = Agent(mars_environment=grid_mars_env, seed=SEED)
+agent.run_simulation()
