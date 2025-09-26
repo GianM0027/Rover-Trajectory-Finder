@@ -19,7 +19,3 @@ grid_mars_env = GridMarsEnv(dtm_file,
 
 agent = Agent(mars_environment=grid_mars_env, seed=SEED)
 agent.run_simulation()
-
-
-
-print('test')
