@@ -16,8 +16,10 @@ class policy_network(torch.nn.Module):
         #       - Un float restituito come logit. Questo rappresenta il "vantaggio" di usare l'azione restituita dall'altra testa.
 
 
-    def forward(self, x):
+    def forward(self, args):
         pass
 
-    def train(self):
-        pass
+    def fit(self, batch, minibatch_size, loss, epochs_per_minibatch=1):
+        #todo: dati i parametri della funzione, esegui l'aggiornamento dei pesi della rete poi resituisci il valore delle loss per ogni minibatch
+        loss_values = []
+        return loss_values
