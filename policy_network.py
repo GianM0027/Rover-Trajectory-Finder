@@ -27,8 +27,7 @@ class PolicyNetwork(torch.nn.Module):
                        {"type": "fc", "out_features": 1}
                    ]
                }
-               """
-
+        """
         super(PolicyNetwork, self).__init__()
 
         self.config = config
@@ -83,18 +82,15 @@ class PolicyNetwork(torch.nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, x):
-        # estrazione feature
-
-        x = self.normalize(x)
-
         for layer in self.backbone_layers:
             x = layer(x)
         x = torch.flatten(x, 1)
 
         # Build heads
         if not self.fc_built:
-            self.head_action = self._build_fc_head(self.head_action_config, x.size(1))
-            self.head_value = self._build_fc_head(self.head_value_config, x.size(1))
+            device = x.device
+            self.head_action = self._build_fc_head(self.head_action_config, x.size(1)).to(device)
+            self.head_value = self._build_fc_head(self.head_value_config, x.size(1)).to(device)
             self.fc_built = True
 
         out_action = self.head_action(x)
@@ -103,58 +99,6 @@ class PolicyNetwork(torch.nn.Module):
         out_value = self.head_value(x)
 
         return out_action, out_value
-
-    def normalize(self, x):
-        """
-            Normalize a 3D tensor by applying two transformations to its channels.
-
-            Parameters
-            ----------
-            x : torch.Tensor
-                Input tensor of shape (C, H, W), where:
-                - C = number of channels (at least 2 are required).
-                - H, W = spatial dimensions.
-
-            Operations
-            ----------
-            1. Channel 0 (altitude):
-               - Computes the minimum and maximum values while ignoring NaNs.
-               - Applies min-max normalization to scale values into the [0, 1] range.
-               - Preserves NaNs in their original positions, or replaces them with a
-                 user-defined value (currently `float()` -> 0.0,
-               - Result: altitude values scaled between 0 and 1.
-
-            2. Channel 1 (position_counter):
-               - Applies a logarithmic transformation `log(1 + x)`, which compresses
-                 large values while preserving small ones.
-               - Adding 1 prevents issues with log(0).
-
-            Returns
-            -------
-            x : torch.Tensor
-                The transformed tensor, with the same shape as the input (C, H, W).
-
-            Notes
-            -----
-            - NaNs in channel 0 are either preserved or replaced with a fill value.
-            - If min_val == max_val in channel 0, normalization will result in NaNs/Infs.
-              This case should be handled explicitly if it can occur.
-            - The log transformation in channel 1 assumes non-negative values.
-              Negative values will result in NaNs.
-            """
-
-        altitude = x[0, :, :]
-        mask = torch.isnan(altitude)
-        min_val = torch.nanmin(altitude)
-        max_val = torch.nanmax(altitude)
-        normalized_altitude = (altitude - min_val) / (max_val - min_val)
-        normalized_altitude[mask] = float()  # set your value #todo
-        x[0, :, :] = normalized_altitude
-
-        position_counter = x[1, :, :]
-        x[1, :, :] = torch.log(1 + position_counter)
-
-        return x
 
     def save_weights(self, path: str):
         torch.save(self.state_dict(), path)
