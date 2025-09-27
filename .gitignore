@@ -2,3 +2,4 @@
 DTMs
 .idea
 __pycache__
+weights/*
