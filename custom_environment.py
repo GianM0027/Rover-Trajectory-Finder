@@ -130,6 +130,9 @@ class GridMarsEnv(gym.Env):
         self.window = None
         self.clock = None
 
+        # seed
+        self.internal_seed = 0
+
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         """Start a new episode.
 
@@ -139,7 +142,8 @@ class GridMarsEnv(gym.Env):
         :return: (observation, info) for the initial state
         """
         # IMPORTANT: Must call this first to seed the random number generator
-        super().reset(seed=seed)
+        super().reset(seed=seed + self.internal_seed)
+        self.internal_seed += 1
 
         # Select a random portion of the DTM map to use as an environment map
         self._local_map, self._local_map_position = self._dtm.get_portion_of_map(self.map_size)

@@ -42,7 +42,7 @@ map_size = 10
 fov_distance = 3
 
 grid_mars_env = GridMarsEnv(dtm_file,
-                            render_mode="no", # human
+                            render_mode="human", # human
                             map_size=map_size,
                             fov_distance=fov_distance,
                             rover_max_step=1,
@@ -57,7 +57,7 @@ if not TRAIN:
 agent = Agent(mars_environment=grid_mars_env, policy_network=policy_network, seed=SEED)
 
 if TRAIN:
-    agent.train(training_episodes=3000,
+    agent.train(training_episodes=1000,
                 batch_size=512,
                 minibatch_size=16,
                 epochs=1,
