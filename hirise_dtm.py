@@ -102,7 +102,7 @@ class HiriseDTM:
 
         return fov_mask
 
-    def get_possible_moves(self, position, moves, max_step, max_drop):
+    def get_possible_moves(self, position, moves, max_step, max_drop, local_map_size, local_map_position):
         """
         Given a point (y, x), returns a 3x3 boolean matrix of possible moves.
         - 1 = rover can move there
@@ -116,8 +116,9 @@ class HiriseDTM:
             moves_idx = np.array((1, 1)) + move         # map move to 3x3 possible_moves matrix index
             new_y, new_x = np.array(position) + move
 
-            # Out of bounds check
-            if not (0 <= new_y < self.numpy_image.shape[0] and 0 <= new_x < self.numpy_image.shape[1]):
+            # Out of bounds check for y
+            if (new_y < local_map_position[0] or new_x < local_map_position[1] or
+                    new_y >= local_map_position[0]+local_map_size or new_x >= local_map_position[1]+local_map_size):
                 possible_moves[moves_idx[0], moves_idx[1]] = 0
                 continue
 

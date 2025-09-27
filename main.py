@@ -37,12 +37,16 @@ config = {
 
 filepath = "DTMs/DTEEC_016460_2230_016170_2230_G01.IMG"
 dtm_file = HiriseDTM(filepath)
-TRAIN = True
+TRAIN = False
 map_size = 10
 fov_distance = 3
 
+if TRAIN:
+    render_mode = "rgb_array"
+else:
+    render_mode = "human"
 grid_mars_env = GridMarsEnv(dtm_file,
-                            render_mode="human", # human
+                            render_mode=render_mode,
                             map_size=map_size,
                             fov_distance=fov_distance,
                             rover_max_step=1,
@@ -57,11 +61,12 @@ if not TRAIN:
 agent = Agent(mars_environment=grid_mars_env, policy_network=policy_network, seed=SEED)
 
 if TRAIN:
-    agent.train(training_episodes=1000,
+    agent.train(training_episodes=2000,
                 batch_size=512,
-                minibatch_size=16,
+                minibatch_size=128,
                 epochs=1,
                 weights_path=weights_path,
-                device=device)
+                device=device,
+                step_verbose=True)
 else:
-    agent.run_simulation(use_policy_network=True, device=device)
+    agent.run_simulation(use_policy_network=True, device=device, verbose=True)

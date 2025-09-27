@@ -142,12 +142,16 @@ class GridMarsEnv(gym.Env):
         :return: (observation, info) for the initial state
         """
         # IMPORTANT: Must call this first to seed the random number generator
-        super().reset(seed=seed + self.internal_seed)
+        if seed is not None:
+            super().reset(seed=seed + self.internal_seed)
+        else:
+            super().reset(seed=self.internal_seed)
         self.internal_seed += 1
 
         # Select a random portion of the DTM map to use as an environment map
         self._local_map, self._local_map_position = self._dtm.get_portion_of_map(self.map_size)
         self.rover_steps_counter = 0
+        self.visited_locations = np.zeros([self.map_size, self.map_size], dtype=np.int32)
 
         # Randomly place the agent anywhere on the grid
         self._agent_relative_location = self.np_random.integers(0, self.map_size, size=2, dtype=int)
@@ -192,26 +196,26 @@ class GridMarsEnv(gym.Env):
         movements_allowed = self._dtm.get_possible_moves(position=self._agent_global_location,
                                                          moves=self._action_to_direction,
                                                          max_step=self.rover_max_step,
-                                                         max_drop=self.rover_max_drop)
+                                                         max_drop=self.rover_max_drop,
+                                                         local_map_size=self.map_size,
+                                                         local_map_position=self._local_map_position)
 
         # Convert the direction (dx, dy) into an index in the 3x3 movements_allowed matrix, to retrieve whether that direction is allowed
         move_index = (1 + direction[0], 1 + direction[1])
 
         # Check if the move is allowed
-        if movements_allowed[move_index]:
+        if movements_allowed[move_index[0], move_index[1]]:
             # Update agent position, ensuring it stays within grid bounds
-            self._agent_relative_location = np.clip(
-                self._agent_relative_location + direction, 0, self.map_size - 1
-            )
+            self._agent_relative_location = self._agent_relative_location + direction
             self._update_fov_coordinates()
             self.current_move_allowed_flag = True
 
-            self._update_visited_locations()
             self._update_detected_altitudes()
         else:
             # Movement forbidden: stay in place.
             self.current_move_allowed_flag = False
-            pass
+
+        self._update_visited_locations()
 
         # Global position and mask update
         self._agent_global_location = self._compute_agent_global_position()
@@ -220,7 +224,7 @@ class GridMarsEnv(gym.Env):
         # Check if agent reached the target
         terminated = np.array_equal(self._agent_relative_location, self._target_location)
 
-        if self.rover_max_number_of_steps == self.rover_steps_counter:
+        if self.rover_max_number_of_steps == self.rover_steps_counter and not terminated:
             truncated = True
             terminated = True
 
@@ -235,7 +239,9 @@ class GridMarsEnv(gym.Env):
         self.render()
 
         if verbose:
-            # todo: add other stuff for debugging purposes
+            agent_y, agent_x = self._agent_relative_location
+            print(f"Agent Position (y, x): {self._agent_relative_location}")
+            print(f"This location was visited {self.visited_locations[agent_y, agent_x]} times")
             print(f"Actions remained: {self.rover_max_number_of_steps-self.rover_steps_counter}")
             print(f"Action Selected: {self._action_to_direction_string[action]}")
             print(f"Movement allowed: {self.current_move_allowed_flag}")
@@ -253,7 +259,10 @@ class GridMarsEnv(gym.Env):
         penalty = 0
         reward = 0
 
-        # todo: add intermediate penalties for visiting the same locations many times
+        # incremental penalty for visiting the same locations many times (0.1 * visits_counter if visits_counter>1)
+        visits_counter = self.visited_locations[self._agent_relative_location[0], self._agent_relative_location[1]]
+        penalty += max(0, (visits_counter-1)*0.1)
+
         # penalize rover if it tried to perform an illegal action (e.g. bump on a wall, jump too high, ...)
         if not self.current_move_allowed_flag:
             penalty += 0.05
@@ -262,7 +271,7 @@ class GridMarsEnv(gym.Env):
         if truncated:
             penalty += 0.5
 
-        # todo: add intermediate rewards based on distance from target (this may be dangerous)
+        # todo: add intermediate rewards based on distance from target (this may be dangerous - probably not good)
         if terminated and not truncated:
             reward += 10
 
