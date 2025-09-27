@@ -27,7 +27,7 @@ class Agent:
 
             while not terminated:
                 if use_policy_network:
-                    processed_observation = self.preprocess_observation(observation)
+                    processed_observation = self.preprocess_observation(observation, device)
                     action_probs, _ = self.policy_network(processed_observation)
                     action = torch.argmax(action_probs).item()
                 else:

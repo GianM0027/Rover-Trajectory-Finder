@@ -1,17 +1,22 @@
 import numpy as np
 import os
-
 import torch
-
 from hirise_dtm import HiriseDTM
 from custom_environment import GridMarsEnv
 from agent import Agent
 from policy_network import PolicyNetwork
 
+if torch.cuda.is_available():
+    device = torch.device('cuda')
+elif torch.backends.mps.is_available():
+    device = torch.device('mps')
+else:
+    device = torch.device('cpu')
+print(f"Using device: {device}")
+
 SEED = 42
 np.random.seed(SEED)
 weights_path = os.path.join('weights', 'weights.h5')
-
 config = {
            "input_channels": 3,
            "backbone": [
@@ -52,6 +57,6 @@ if not TRAIN:
 agent = Agent(mars_environment=grid_mars_env, policy_network=policy_network, seed=SEED)
 
 if TRAIN:
-    agent.train(training_episodes=3000, batch_size=512, minibatch_size=16, epochs=1, weights_path=weights_path)
+    agent.train(training_episodes=3000, batch_size=512, minibatch_size=16, epochs=1, weights_path=weights_path, device=device)
 else:
-    agent.run_simulation(use_policy_network=True)
+    agent.run_simulation(use_policy_network=True, device=device)
