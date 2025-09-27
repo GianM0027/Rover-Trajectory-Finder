@@ -234,12 +234,12 @@ class GridMarsEnv(gym.Env):
             print(f"Actions remained: {self.rover_max_number_of_steps-self.rover_steps_counter}")
             print(f"Action Selected: {self._action_to_direction_string[action]}")
             print(f"Movement allowed: {self.current_move_allowed_flag}")
+            print(f"Reward: {reward}")
 
             if terminated:
                 print("The Rover reached its goal. Simulation concluded")
             if truncated:
                 print(f"The Rover have not reached its goal withing {self.rover_max_number_of_steps} steps. Simulation concluded")
-            #print(f"FOV mask: \n{self._fov_mask}")
             print()
 
         return observation, reward, terminated, truncated, info
@@ -251,7 +251,7 @@ class GridMarsEnv(gym.Env):
         # todo: add intermediate penalties for visiting the same locations many times
         # penalize rover if it tried to perform an illegal action (e.g. bump on a wall, jump too high, ...)
         if not self.current_move_allowed_flag:
-            penalty += 0.1
+            penalty += 0.05
 
         # penalize rover if it did not reach the target within the maximum number of steps
         if truncated:
