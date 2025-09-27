@@ -262,11 +262,11 @@ class GridMarsEnv(gym.Env):
         if truncated:
             penalty += 0.5
 
-        # todo: add intermediate rewards based on distance from target
+        # todo: add intermediate rewards based on distance from target (this may be dangerous)
         if terminated and not truncated:
-            reward += 1
+            reward += 10
 
-        return reward + penalty
+        return reward - penalty
 
     def render(self):
         if self.render_mode == "human":
