@@ -143,6 +143,7 @@ class GridMarsEnv(gym.Env):
 
         # Select a random portion of the DTM map to use as an environment map
         self._local_map, self._local_map_position = self._dtm.get_portion_of_map(self.map_size)
+        self.rover_steps_counter = 0
 
         # Randomly place the agent anywhere on the grid
         self._agent_relative_location = self.np_random.integers(0, self.map_size, size=2, dtype=int)

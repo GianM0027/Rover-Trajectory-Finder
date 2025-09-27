@@ -98,7 +98,8 @@ class Agent:
               c1=0.5,
               c2=0.01,
               learning_rate=1e-4,
-              weights_path=None):
+              weights_path=None,
+              step_verbose=False):
 
         mse_loss = nn.MSELoss()
         optimizer = optim.Adam(self.policy_network.parameters(), lr=learning_rate)
@@ -118,7 +119,7 @@ class Agent:
                     action_probs, value = self.policy_network(processed_observation)
                 action = torch.distributions.Categorical(action_probs).sample().item()
 
-                observation, reward, terminated, truncated, info = self.mars_environment.step(action)
+                observation, reward, terminated, truncated, info = self.mars_environment.step(action, verbose=step_verbose)
                 processed_observation = self.preprocess_observation(observation, device)
                 prob_of_taken_action = action_probs.squeeze()[action]
 
