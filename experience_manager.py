@@ -39,11 +39,13 @@ class ExperienceManager:
         :return: The requested data as a numpy array or a torch tensor.
         """
         data = self.experienceDict[key]
-
         if return_type == "np":
-            return data
+            return np.array(data)
+
         elif return_type == "torch":
-            return torch.tensor(data, dtype=torch.float32)
+            # Convert list of arrays to a single numpy array before converting to a tensor
+            np_array = np.array(data)
+            return torch.tensor(np_array, dtype=torch.float32)
 
     def is_full(self):
         """
@@ -83,46 +85,42 @@ class ExperienceManager:
 
         :return: Two torch tensors containing the advantages and returns respectively.
         """
-        advantages = []
-        returns = []
 
         rewards = self.get("rewards", return_type="np")
         values = self.get("values", return_type="np")
         terminated = self.get("terminated", return_type="np")
 
+        # 1. Initialize advantage array with the same shape as rewards
         env_advantages = np.zeros_like(rewards, dtype=np.float64)
         gae = 0
 
-        # Calculate returns by iterating backwards through the rewards
+        # Calculate returns (and GAE advantages) by iterating backwards
         for i in reversed(range(len(rewards))):
+            current_next_value = values[i + 1] if i != len(rewards) - 1 else next_value
 
-            # if this is the last position of the batch retrieve the next value
-            if i != len(rewards) - 1:
-                next_value = values[i + 1]
-
-            # update next_value and gae according to the fact that this may be a terminal state
-            next_value = next_value * (1 - terminated[i])
+            # update current_next_value and gae according to the fact that this may be a terminal state
+            current_next_value = current_next_value * (1 - terminated[i])
             gae = gae * (1 - terminated[i])
 
             # compute advantages
-            delta = rewards[i] + gamma * next_value - values[i]
+            delta = rewards[i] + gamma * current_next_value - values[i]
             env_advantages[i] = gae = delta + gamma * lambda_ * gae
 
-        # normalize the advantage
-        env_advantages = env_advantages - np.mean(env_advantages) / (np.std(env_advantages) + 1e-10)
+        # 2. normalize the advantage
+        env_advantages = (env_advantages - np.mean(env_advantages)) / (np.std(env_advantages) + 1e-10)
 
-        # concatenate the environment advantages and returns to the full lists
-        advantages.extend(env_advantages)
-        returns.extend(env_advantages + values)
+        # 3. Calculate returns GAE-style: GAE + Value Estimates
+        returns = [env_advantages[i] + values[i] for i in range(0, len(env_advantages))]
 
-        return torch.tensor(advantages, dtype=torch.float32), torch.tensor(returns, dtype=torch.float32)
+        # 4. Return the calculated arrays
+        return torch.tensor(env_advantages, dtype=torch.float32), torch.tensor(returns, dtype=torch.float32)
 
-    def get_batches(self, device, next_values, td_gamma=0.999, gae_lambda=0.95, shuffle=True):
+    def get_batches(self, device, next_value, td_gamma=0.999, gae_lambda=0.95, shuffle=True):
         """
         Create batches of data for training using the stored experiences.
 
         :param device: The device (CPU or GPU) to transfer the tensors to.
-        :param next_values: The value estimates for the next state.
+        :param next_value: The value estimates for the next state.
         :param td_gamma: discount factor for rewards.
         :param gae_lambda: Smoothing parameter for GAE.
         :param shuffle: Whether to shuffle the batches or not.
@@ -132,7 +130,7 @@ class ExperienceManager:
         states = self.get("states", return_type="torch").to(device)
         actions = self.get("actions", return_type="torch").to(device)
         action_probs = self.get("action_probs", return_type="torch").to(device)
-        advantages, returns = self.compute_advantage_and_returns(next_values, td_gamma, gae_lambda)
+        advantages, returns = self.compute_advantage_and_returns(next_value, td_gamma, gae_lambda)
         advantages = advantages.to(device)
         returns = returns.to(device)
 
