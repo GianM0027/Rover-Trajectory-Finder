@@ -425,15 +425,12 @@ class GridMarsEnv(gym.Env):
             print(row)
         print()
 
-    from collections import deque
-    import numpy as np
-
     def find_path(self):
-        start = tuple(self._agent_relative_location)
+        rover = tuple(self._agent_relative_location)
         target = tuple(self._target_location)
 
-        queue = deque([[start]])
-        visited = set([start])
+        queue = deque([[rover]])
+        visited = set([])
 
         while queue:
             path = queue.popleft()
@@ -453,12 +450,12 @@ class GridMarsEnv(gym.Env):
                         neighbor_altitude = self._local_map[new_row, new_col]
                         diff = neighbor_altitude - current_altitude
 
-                        print(
-                            f"Current: ({row},{col}) {current_altitude:.2f} | Neighbor: ({new_row},{new_col}) "
-                            f"{neighbor_altitude:.2f} -> Step: {neighbor_altitude - current_altitude:.2f}")
+                        #print(
+                            #f"Current: ({row},{col}) {current_altitude:.2f} | Neighbor: ({new_row},{new_col}) "
+                            #f"{neighbor_altitude:.2f} -> Step: {neighbor_altitude - current_altitude:.2f}")
 
                         if -self.rover_max_drop <= diff <= self.rover_max_step:
-                            visited.add(new_pos)
+                            visited.add(((row, col), new_pos))
                             new_path = path + [new_pos]
                             queue.append(new_path)
 
