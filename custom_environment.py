@@ -1,3 +1,5 @@
+from collections import deque
+
 import numpy as np
 import gymnasium as gym
 from typing import Optional
@@ -259,7 +261,7 @@ class GridMarsEnv(gym.Env):
 
         # incremental penalty for visiting the same locations many times clipped between 0 and 5 (saturated after 100 visits)
         visits_counter = self.visited_locations[self._agent_relative_location[0], self._agent_relative_location[1]]
-        penalty += min(5, max(0, (visits_counter-1)*0.05))
+        penalty += min(5, max(0, (visits_counter-1)*0.01))
         #reward += 0.1 if visits_counter == 1 else 0
 
         # penalize rover if it tried to perform an illegal action (e.g. bump on a wall, jump too high, ...)
@@ -401,7 +403,7 @@ class GridMarsEnv(gym.Env):
         fps = 60 if getattr(self, "_fast_mode", False) else 5
         self.clock.tick(fps)
 
-    def render_ascii(self):
+    def render_ascii(self, path=None):
         """
         Render the environment for human viewing.
         """
@@ -416,9 +418,51 @@ class GridMarsEnv(gym.Env):
                 elif (y, x) in self._fov_coordinates:
                     row += "* "  # Agent FOV
                 else:
-                    row += ". "  # Empty
+                    if path is not None and any((y, x) == tuple(p) for p in path):
+                        row += "+ "
+                    else:
+                        row += ". "  # Empty
             print(row)
         print()
+
+    from collections import deque
+    import numpy as np
+
+    def find_path(self):
+        start = tuple(self._agent_relative_location)
+        target = tuple(self._target_location)
+
+        queue = deque([[start]])
+        visited = set([start])
+
+        while queue:
+            path = queue.popleft()
+            row, col = path[-1]
+
+            if (row, col) == target:
+                return np.array(path, dtype=object)
+
+            current_altitude = self._local_map[row, col]
+
+            for dr, dc in self._action_to_direction.values():
+                new_row, new_col = row + dr, col + dc
+                new_pos = (new_row, new_col)
+
+                if 0 <= new_row < self.map_size and 0 <= new_col < self.map_size:
+                    if new_pos not in visited:
+                        neighbor_altitude = self._local_map[new_row, new_col]
+                        diff = neighbor_altitude - current_altitude
+
+                        print(
+                            f"Current: ({row},{col}) {current_altitude:.2f} | Neighbor: ({new_row},{new_col}) "
+                            f"{neighbor_altitude:.2f} -> Step: {neighbor_altitude - current_altitude:.2f}")
+
+                        if -self.rover_max_drop <= diff <= self.rover_max_step:
+                            visited.add(new_pos)
+                            new_path = path + [new_pos]
+                            queue.append(new_path)
+
+        return None
 
     def _update_fov_coordinates(self):
         agent_y, agent_x = self._agent_relative_location
