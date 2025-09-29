@@ -103,8 +103,8 @@ class ExperienceManager:
             gae = gae * (1 - terminated[i])
 
             # compute advantages
-            delta = rewards[i] + gamma * current_next_value - values[i]
-            env_advantages[i] = gae = delta + gamma * lambda_ * gae
+            delta = rewards[i] + (gamma * current_next_value) - values[i]
+            env_advantages[i] = gae = delta + (gamma * lambda_ * gae)
 
         # 2. normalize the advantage
         env_advantages = (env_advantages - np.mean(env_advantages)) / (np.std(env_advantages) + 1e-10)
