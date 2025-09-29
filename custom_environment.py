@@ -514,8 +514,8 @@ class GridMarsEnv(gym.Env):
     def _update_detected_altitudes(self):
         local_fov_values, local_fov_positions = self._get_fov_map_w_altitudes()
 
-        seen_altitudes_values = local_fov_values[self._fov_mask.astype(np.bool)]
-        seen_altitudes_positions = local_fov_positions[self._fov_mask.astype(np.bool)]
+        seen_altitudes_values = local_fov_values[self._fov_mask.astype(np.bool_)]
+        seen_altitudes_positions = local_fov_positions[self._fov_mask.astype(np.bool_)]
 
         for altitude, position in zip(seen_altitudes_values, seen_altitudes_positions):
             y, x = position
@@ -541,12 +541,12 @@ class GridMarsEnv(gym.Env):
             # fov information
             "local_fov_values": local_fov_values,           # all altitudes in FOV
             "local_fov_positions": local_fov_positions,     # coordinates of FOV with local map as reference system (not global)
-            "fov_mask": self._fov_mask.astype(np.bool),     # boolean mask indicating which pixels are visible to the agent within the FOV
+            "fov_mask": self._fov_mask.astype(np.bool_),     # boolean mask indicating which pixels are visible to the agent within the FOV
 
             # local map information
             "local_map": self._local_map,                                   # Entire local map where the agent is moving (not global)
             "visited_locations": self.visited_locations,                    # Integer matrix indicating the number of times the agent stepped on that location
-            "local_map_mask": self._detected_altitudes.astype(np.bool),     # Boolean matrix indicating which locations the agent has seen so far (not necessarily stepped on)
+            "local_map_mask": self._detected_altitudes.astype(np.bool_),     # Boolean matrix indicating which locations the agent has seen so far (not necessarily stepped on)
         }
 
     def _update_visited_locations(self):
