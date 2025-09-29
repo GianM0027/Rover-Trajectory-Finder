@@ -1,4 +1,6 @@
 import os
+from collections import deque
+
 import rasterio
 import numpy as np
 from typing import Tuple, Dict
@@ -138,6 +140,36 @@ class HiriseDTM:
                 possible_moves[moves_idx[0], moves_idx[1]] = 0
 
         return possible_moves
+
+    def get_adjacency_list(self, moves, max_step, max_drop, local_map_size, local_map_position):
+        adjacency_list = {}
+
+        for global_y in range(local_map_position[0], local_map_position[0] + local_map_size):
+            for global_x in range(local_map_position[1], local_map_position[1] + local_map_size):
+                local_y = global_y - local_map_position[0]
+                local_x = global_x - local_map_position[1]
+
+                possible_moves = self.get_possible_moves(
+                    (global_y, global_x),
+                    moves,
+                    max_step,
+                    max_drop,
+                    local_map_size,
+                    local_map_position
+                )
+
+                neighbors = []
+                center = np.array((1, 1))
+                for move in moves.values():
+                    idx = tuple(center + move)
+                    if possible_moves[idx]:
+                        neighbors.append((local_y + move[0], local_x + move[1]))
+
+                adjacency_list[(local_y, local_x)] = neighbors
+
+        return adjacency_list
+
+
 
     def get_lowest_highest_altitude(self):
         return np.nanmin(self.numpy_image), np.nanmax(self.numpy_image)

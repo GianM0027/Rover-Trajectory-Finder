@@ -1,3 +1,4 @@
+import heapq
 from collections import deque
 
 import numpy as np
@@ -426,38 +427,49 @@ class GridMarsEnv(gym.Env):
         print()
 
     def find_path(self):
-        rover = tuple(self._agent_relative_location)
+        start = tuple(self._agent_relative_location)
         target = tuple(self._target_location)
 
-        queue = deque([[rover]])
-        visited = set([])
+        # local adjacency list
+        adjacency_list = self._dtm.get_adjacency_list(moves=self._action_to_direction,
+                                                      max_step=self.rover_max_step,
+                                                      max_drop=self.rover_max_drop,
+                                                      local_map_size=self.map_size,
+                                                      local_map_position=self._local_map_position)
 
-        while queue:
-            path = queue.popleft()
-            row, col = path[-1]
+        # Dijkstra: coda di priorità [(costo, nodo)]
+        heap = [(0, start)]
+        costs = {start: 0}
+        parent = {start: None}
 
-            if (row, col) == target:
-                return np.array(path, dtype=object)
+        while heap:
+            current_cost, node = heapq.heappop(heap)
 
-            current_altitude = self._local_map[row, col]
+            if node == target:
+                # Ricostruisci path
+                path = []
+                while node is not None:
+                    path.append(node)
+                    node = parent[node]
+                return np.array(path[::-1], dtype=object)
 
-            for dr, dc in self._action_to_direction.values():
-                new_row, new_col = row + dr, col + dc
-                new_pos = (new_row, new_col)
+            # Se il nodo è già stato raggiunto con un costo inferiore, skip
+            if current_cost > costs[node]:
+                continue
 
-                if 0 <= new_row < self.map_size and 0 <= new_col < self.map_size:
-                    if new_pos not in visited:
-                        neighbor_altitude = self._local_map[new_row, new_col]
-                        diff = neighbor_altitude - current_altitude
+            for neighbor in adjacency_list.get(node, []):
+                # calcola costo per muoversi: qui possiamo usare il dislivello assoluto come esempio
+                y1, x1 = node
+                y2, x2 = neighbor
+                diff = abs(self._local_map[y2, x2] - self._local_map[y1, x1])
+                step_cost = 1 + diff  # costo base 1 + penalità dislivello
 
-                        #print(
-                            #f"Current: ({row},{col}) {current_altitude:.2f} | Neighbor: ({new_row},{new_col}) "
-                            #f"{neighbor_altitude:.2f} -> Step: {neighbor_altitude - current_altitude:.2f}")
+                new_cost = current_cost + step_cost
 
-                        if -self.rover_max_drop <= diff <= self.rover_max_step:
-                            visited.add(((row, col), new_pos))
-                            new_path = path + [new_pos]
-                            queue.append(new_path)
+                if neighbor not in costs or new_cost < costs[neighbor]:
+                    costs[neighbor] = new_cost
+                    parent[neighbor] = node
+                    heapq.heappush(heap, (new_cost, neighbor))
 
         return None
 
