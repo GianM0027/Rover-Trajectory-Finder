@@ -14,7 +14,7 @@ class Agent:
         self.seed = seed
         self.policy_network = policy_network
 
-    def run_simulation(self, max_episodes=None, use_policy_network=False, verbose=False, device="cuda"):
+    def run_simulation(self, max_episodes=None, use_policy_network=False, verbose=False, device="cuda", sample_action=False):
         if use_policy_network:
             self.policy_network.eval()
             self.policy_network.to(device)
@@ -24,12 +24,16 @@ class Agent:
             print(f"Episode #{n_episode + 1}")
             observation, _ = self.mars_environment.reset(seed=self.seed)
             terminated = False
+            truncated = False
 
-            while not terminated:
+            while not terminated and not truncated:
                 if use_policy_network:
                     processed_observation = self.preprocess_observation(observation, device)
                     action_probs, _ = self.policy_network(processed_observation)
-                    action = torch.argmax(action_probs).item()
+                    if sample_action:
+                        action = torch.distributions.Categorical(action_probs).sample().item()
+                    else:
+                        action = torch.argmax(action_probs).item()
                 else:
                     action = np.random.randint(8)
 
@@ -112,8 +116,9 @@ class Agent:
         for _ in tqdm(range(training_episodes), desc="Training Episodes"):
             observation, _ = self.mars_environment.reset(seed=self.seed)
             terminated = False
+            truncated = False
 
-            while not terminated:
+            while not terminated and not truncated:
                 with torch.no_grad():
                     processed_observation = self.preprocess_observation(observation, device)
                     action_probs, value = self.policy_network(processed_observation)
