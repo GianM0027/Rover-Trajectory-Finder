@@ -189,6 +189,7 @@ class GridMarsEnv(gym.Env):
         """
         # Map the discrete action (0-8) to a movement direction
         truncated = False
+        terminated = False
         self.rover_steps_counter += 1
         direction = self._action_to_direction[action]
 
@@ -223,10 +224,7 @@ class GridMarsEnv(gym.Env):
 
         # Check if agent reached the target
         terminated = np.array_equal(self._agent_relative_location, self._target_location)
-
-        if self.rover_max_number_of_steps == self.rover_steps_counter and not terminated:
-            truncated = True
-            terminated = True
+        truncated = self.rover_max_number_of_steps == self.rover_steps_counter
 
         # Current reward
         reward = self._compute_reward(terminated, truncated)
@@ -259,17 +257,18 @@ class GridMarsEnv(gym.Env):
         penalty = 0
         reward = 0
 
-        # incremental penalty for visiting the same locations many times (0.1 * visits_counter if visits_counter>1)
+        # incremental penalty for visiting the same locations many times clipped between 0 and 5 (saturated after 100 visits)
         visits_counter = self.visited_locations[self._agent_relative_location[0], self._agent_relative_location[1]]
-        penalty += max(0, (visits_counter-1)*0.1)
+        penalty += min(5, max(0, (visits_counter-1)*0.05))
+        #reward += 0.1 if visits_counter == 1 else 0
 
         # penalize rover if it tried to perform an illegal action (e.g. bump on a wall, jump too high, ...)
         if not self.current_move_allowed_flag:
-            penalty += 0.05
+            penalty += 0.2
 
         # penalize rover if it did not reach the target within the maximum number of steps
         if truncated:
-            penalty += 0.5
+            penalty += 5
 
         # todo: add intermediate rewards based on distance from target (this may be dangerous - probably not good)
         if terminated and not truncated:
