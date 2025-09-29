@@ -1,0 +1,11 @@
+torch
+torchvision
+torchaudio
+gymnasium
+numpy
+Pillow
+matplotlib
+tqdm
+jupyter
+pygame
+rosterio
