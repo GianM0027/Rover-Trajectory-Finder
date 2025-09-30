@@ -426,9 +426,10 @@ class GridMarsEnv(gym.Env):
             print(row)
         print()
 
-    def find_path(self):
+    def find_path(self, use_slope_cost=False):
         start = tuple(self._agent_relative_location)
         target = tuple(self._target_location)
+        step_cost = 1
 
         # local adjacency list
         adjacency_list = self._dtm.get_adjacency_list(moves=self._action_to_direction,
@@ -437,7 +438,7 @@ class GridMarsEnv(gym.Env):
                                                       local_map_size=self.map_size,
                                                       local_map_position=self._local_map_position)
 
-        # Dijkstra: coda di priorità [(costo, nodo)]
+        # Dijkstra: priority queue [(cost, node)]
         heap = [(0, start)]
         costs = {start: 0}
         parent = {start: None}
@@ -446,23 +447,25 @@ class GridMarsEnv(gym.Env):
             current_cost, node = heapq.heappop(heap)
 
             if node == target:
-                # Ricostruisci path
+                # reconstruct path
                 path = []
                 while node is not None:
                     path.append(node)
                     node = parent[node]
                 return np.array(path[::-1], dtype=object)
 
-            # Se il nodo è già stato raggiunto con un costo inferiore, skip
+            # If node was already reached with lower cost, skip
             if current_cost > costs[node]:
                 continue
 
             for neighbor in adjacency_list.get(node, []):
-                # calcola costo per muoversi: qui possiamo usare il dislivello assoluto come esempio
-                y1, x1 = node
-                y2, x2 = neighbor
-                diff = abs(self._local_map[y2, x2] - self._local_map[y1, x1])
-                step_cost = 1 + diff  # costo base 1 + penalità dislivello
+                # compute cost for moving
+
+                if use_slope_cost:
+                    y1, x1 = node
+                    y2, x2 = neighbor
+                    diff = min(step_cost, max(-step_cost, self._local_map[y2, x2] - self._local_map[y1, x1]))
+                    step_cost += diff
 
                 new_cost = current_cost + step_cost
 
