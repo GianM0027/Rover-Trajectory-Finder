@@ -45,6 +45,7 @@ class Agent:
 
     @classmethod
     def preprocess_observation(cls, observation, device="cuda", return_type="torch"):
+        padding_number = -1
         agent_position = observation["agent"]
         target_position = observation["target"]
 
@@ -63,17 +64,16 @@ class Agent:
         # Channel 1: visited locations
         channel_one = visited_locations.astype(np.float32)
 
-        # Channel 2: agent/target positions
-        channel_two = np.zeros(map_shape, dtype=np.float32)
-        if agent_position[0] == target_position[0] and agent_position[1] == target_position[1]:
-            channel_two[agent_position[0], agent_position[1]] = 1.0
-            channel_two[target_position[0], target_position[1]] = -1.0
-        else:
-            # todo: capire che fare se agente e target sono nella stessa posizione
-            channel_two[agent_position[0], agent_position[1]] = 2.0
+        # Channel 2: agent position
+        channel_two = np.full(map_shape, fill_value=-1, dtype=np.float32)
+        channel_two[agent_position[0], agent_position[1]] = 1.0
+
+        # Channel 3: target position
+        channel_three = np.full(map_shape, fill_value=-1, dtype=np.float32)
+        channel_three[target_position[0], target_position[1]] = 1.0
 
         # Stack channels
-        x = np.stack([channel_zero, channel_one, channel_two], axis=0)  # (C, H, W)
+        x = np.stack([channel_zero, channel_one, channel_two, channel_three], axis=0)  # (C, H, W)
 
         # Normalize channel 0 (altitude)
         altitude = x[0]
@@ -84,10 +84,12 @@ class Agent:
             x[0] = np.zeros_like(altitude)
         else:
             x[0] = (altitude - min_val) / (max_val - min_val)
-        x[0][mask] = -1.0  # sentinel for NaN
+        x[0][mask] = padding_number  # sentinel for NaN
 
         # Normalize channel 1 (visited locations)
         x[1] = np.log1p(x[1])
+        mask = channel_one == 0.
+        x[1][mask] = padding_number
 
         # Convert to torch tensor and add batch dimension
         return torch.tensor(x, dtype=torch.float32).unsqueeze(0).to(device)
