@@ -133,8 +133,8 @@ class GridMarsEnv(gym.Env):
         self.window = None
         self.clock = None
 
-        # seed
-        self.internal_seed = 0
+        # Flag for seed setting
+        self.is_first_execution = True
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         """Start a new episode.
@@ -144,15 +144,13 @@ class GridMarsEnv(gym.Env):
 
         :return: (observation, info) for the initial state
         """
-        # IMPORTANT: Must call this first to seed the random number generator
-        if seed is not None:
-            super().reset(seed=seed + self.internal_seed)
-        else:
-            super().reset(seed=self.internal_seed)
-        self.internal_seed += 1
+        # Seed the random number generator
+        if self.is_first_execution:
+            super().reset(seed=seed)
+            self.is_first_execution = False
 
         # Select a random portion of the DTM map to use as an environment map
-        self._local_map, self._local_map_position = self._dtm.get_portion_of_map(self.map_size)
+        self._local_map, self._local_map_position = self._dtm.get_portion_of_map(self.map_size, random_rotation=True)
         self.rover_steps_counter = 0
         self.visited_locations = np.zeros([self.map_size, self.map_size], dtype=np.int32)
 
@@ -191,8 +189,6 @@ class GridMarsEnv(gym.Env):
         :return: (observation, reward, terminated, truncated, info)
         """
         # Map the discrete action (0-8) to a movement direction
-        truncated = False
-        terminated = False
         self.rover_steps_counter += 1
         direction = self._action_to_direction[action]
 
