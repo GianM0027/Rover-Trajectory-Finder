@@ -24,12 +24,17 @@ np.random.seed(TRAINING_SEED)
 weights_path = os.path.join('weights', 'weights.h5')
 config = {
    "input_channels": 3,
+   "vector_features": 5, 
    "backbone": [
        {"type": "conv", "out_channels": 32, "kernel_size": 3, "stride": 1, "padding": 1, "activation": "relu"},
        {"type": "pool", "mode": "max", "kernel_size": 2},
        {"type": "conv", "out_channels": 64, "kernel_size": 3, "stride": 1, "padding": 1, "activation": "relu"},
        {"type": "pool", "mode": "max", "kernel_size": 2}
    ],
+   "vector_mlp": [
+        {"type": "fc", "out_features": 64, "activation": "relu"},
+        {"type": "fc", "out_features": 32, "activation": "relu"}
+    ],
    "head_action": [
        {"type": "fc", "out_features": 64, "activation": "relu"},
        {"type": "fc", "out_features": 8}
