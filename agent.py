@@ -138,16 +138,27 @@ class Agent:
             terminated = False
             truncated = False
 
+            # Retrieve optimal paths and check whether there is one
             optimal_path_no_slope = self.mars_environment.find_best_path(use_slope_cost=False)
             optimal_path_w_slope = self.mars_environment.find_best_path(use_slope_cost=True)
+
+            if optimal_path_no_slope is not None:
+                optimal_path_no_slope = [[int(pos[0]), int(pos[1])] for pos in optimal_path_no_slope]
+            else:
+                optimal_path_no_slope = []
+
+            if optimal_path_w_slope is not None:
+                optimal_path_w_slope = [[int(pos[0]), int(pos[1])] for pos in optimal_path_w_slope]
+            else:
+                optimal_path_w_slope = []
 
             info_to_save = {
                 "agent_positions": [],
                 "rewards": [],
                 "terminated": [],
                 "truncated": [],
-                "optimal_path_no_slope": [[int(pos[0]), int(pos[1])] for pos in optimal_path_no_slope],
-                "optimal_path_w_slope": [[int(pos[0]), int(pos[1])] for pos in optimal_path_w_slope],
+                "optimal_path_no_slope": optimal_path_no_slope,
+                "optimal_path_w_slope": optimal_path_w_slope,
                 "episode_length": 0,
                 "episode_number": episodes_counter,
             }
