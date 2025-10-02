@@ -30,8 +30,6 @@ config = {
        {"type": "pool", "mode": "max", "kernel_size": 2},
        {"type": "conv", "out_channels": 64, "kernel_size": 3, "stride": 1, "padding": 1, "activation": "relu"},
        {"type": "pool", "mode": "max", "kernel_size": 2},
-       {"type": "conv", "out_channels": 1, "kernel_size": 3, "stride": 1, "padding": 1, "activation": "relu"},
-       {"type": "pool", "mode": "max", "kernel_size": 2}
    ],
    "vector_mlp": [
        {"type": "fc", "out_features": 64, "activation": "relu"},
@@ -47,7 +45,7 @@ config = {
    ]
 }
 
-filepath = "DTMs/DTEEC_016460_2230_016170_2230_G01.IMG"
+filepath = "DTMs/DTEED_082989_1630_083055_1630_A01.IMG"
 dtm_file = HiriseDTM(filepath)
 
 TRAIN = True

@@ -78,7 +78,7 @@ class Agent:
         n_visits = visited_locations[agent_position[0], agent_position[1]] / self.max_number_of_steps
 
         # Convert to torch tensor and add batch dimension
-        altitudes = torch.tensor(altitudes, dtype=torch.float32).unsqueeze(0).to(device)
+        altitudes = torch.tensor(altitudes, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to(device)
 
         position_vector = [v[i] for i in range(2) for v in [current_goal_vector, previous_goal_vector]] + [n_visits]
         position_vector = torch.tensor(position_vector, dtype=torch.float32).unsqueeze(0).to(device)
@@ -131,7 +131,7 @@ class Agent:
                 prob_of_taken_action = action_probs.squeeze()[action]
 
                 experience_manager.appendTrajectory(
-                    altitudes=processed_altitudes.cpu().numpy(),
+                    altitudes=processed_altitudes.squeeze().cpu().numpy(),
                     position_vectors=processed_positions.squeeze().cpu().numpy(),
                     action=action,
                     action_prob=prob_of_taken_action.cpu().numpy(),
@@ -150,6 +150,7 @@ class Agent:
 
                     for _ in range(epochs):
                         for altitude, position_vector, actions, old_action_probs, advantages, returns in dataloader:
+                            altitude = altitude.unsqueeze(1) 
                             current_action_dist, values = self.policy_network(altitude, position_vector)
                             current_action_probs = current_action_dist.gather(
                                 dim=1,
