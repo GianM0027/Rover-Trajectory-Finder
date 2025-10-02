@@ -11,7 +11,6 @@ from typing import Dict
 #       Capire se le posizioni di agente e target è meglio passarle come vettore (y,x) invece che come canale della matrice.
 
 class PolicyNetwork(torch.nn.Module):
-
     def __init__(self, config: Dict):
         super(PolicyNetwork, self).__init__()
         """
@@ -87,7 +86,11 @@ class PolicyNetwork(torch.nn.Module):
             in_features = layer_cfg["out_features"]
         return nn.Sequential(*layers)
 
-    def forward(self, x):
+    def forward(self, matrice, vettore):
+
+        # todo: matrice va nella CNN, ha dimensione [batch_size, map_size, map_size]
+        # todo vettore va a una MLP, ha dimensione [5,]
+
         for layer in self.backbone_layers:
             x = layer(x)
         x = torch.flatten(x, 1)
