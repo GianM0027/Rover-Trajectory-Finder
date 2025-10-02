@@ -31,7 +31,7 @@ class HiriseDTM:
         self.file_name = os.path.split(img_path)[-1].replace(".IMG", "")
         self.metadata = self._get_metadata()
 
-    def get_portion_of_map(self, size, max_percentage_inf=0):
+    def get_portion_of_map(self, size, max_percentage_inf=0, random_rotation=False):
         # Extracts a size x size portion of the image, avoiding too many np.inf
         img_height, img_width = self.numpy_image.shape[:2]
 
@@ -47,6 +47,10 @@ class HiriseDTM:
             num_inf = np.sum(np.isinf(image_subset))
             if num_inf <= max_percentage_inf * (size * size):
                 break
+
+        if random_rotation:
+            # todo: data augmentation sulle porzioni della mappa, effettua una rotazione random dell'immagine
+            pass
 
         # return image portion and its coordinates as (row,column)=(y,x)
         return image_subset, (y, x)
