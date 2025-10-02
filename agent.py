@@ -1,3 +1,5 @@
+import json
+import os
 import random
 import torch
 from torch import nn, optim
@@ -9,13 +11,34 @@ from experience_manager import ExperienceManager
 
 
 class Agent:
-    def __init__(self, mars_environment: GridMarsEnv, policy_network: PolicyNetwork = None, max_number_of_steps=None, seed=None):
+    def __init__(self,
+                 policy_network,
+                 fov_distance,
+                 dtm_file,
+                 map_size,
+                 seed=None,
+                 max_number_of_steps=None,
+                 max_step_height=1,
+                 max_drop_height=1):
+
         self.seed = seed
         self.policy_network = policy_network
-        self.mars_environment = mars_environment
         self.max_number_of_steps = max_number_of_steps
+        self.max_step_height = max_step_height
+        self.max_drop_height = max_drop_height
+        self.fov_distance = fov_distance
+        self.dtm_file = dtm_file
 
-    def run_simulation(self, max_episodes=None, use_policy_network=False, verbose=False, device="cuda", sample_action=False):
+        self.mars_environment = GridMarsEnv(
+            dtm=dtm_file,
+            map_size=map_size,
+            fov_distance=fov_distance,
+            rover_max_step=max_step_height,
+            rover_max_drop=max_drop_height,
+            rover_max_number_of_steps=max_number_of_steps)
+
+    def run_simulation(self, max_episodes=None, use_policy_network=False, verbose=False, device="cuda", sample_action=False, render_mode="human"):
+        self.mars_environment.render_mode = render_mode
         if use_policy_network:
             self.policy_network.eval()
             self.policy_network.to(device)
@@ -53,13 +76,12 @@ class Agent:
         local_map = observation["local_map"]
         local_map_mask = observation["local_map_mask"]
         visited_locations = observation["visited_locations"]
-        map_shape = local_map.shape
 
         # Altitude Matrix with MinMax normalization
         altitudes = np.array([
             [local_map[y, x] if local_map_mask[y, x] else np.nan
-             for x in range(map_shape[1])]
-            for y in range(map_shape[0])
+             for x in range(self.mars_environment.map_size)]
+            for y in range(self.mars_environment.map_size)
         ], dtype=np.float32)
 
         mask = np.isnan(altitudes)
@@ -71,13 +93,14 @@ class Agent:
             altitudes = ((altitudes - min_val) / (max_val - min_val)) + eps
         altitudes[mask] = padding_number  # sentinel for NaN
 
-        current_goal_vector = (target_position - agent_position) / map_shape[0]
-        previous_goal_vector = target_position - agent_previous_position / map_shape[0]
+        current_goal_vector = (target_position - agent_position) / self.mars_environment.map_size
+        previous_goal_vector = target_position - agent_previous_position / self.mars_environment.map_size
         n_visits = visited_locations[agent_position[0], agent_position[1]] / self.max_number_of_steps
 
-        # Convert to torch tensor and add batch dimension
+        # Convert to torch tensor and add batch+channel dimension
         altitudes = torch.tensor(altitudes, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to(device)
 
+        # Convert to torch tensor all the positions and add batch dimension
         position_vector = [v[i] for i in range(2) for v in [current_goal_vector, previous_goal_vector]] + [n_visits]
         position_vector = torch.tensor(position_vector, dtype=torch.float32).unsqueeze(0).to(device)
 
@@ -94,16 +117,11 @@ class Agent:
               c2=0.01,
               learning_rate=1e-4,
               weights_path=None,
-              step_verbose=False):
-
-        # todo: salvare su file tutte le statistiche del training:
-        #       - loss
-        #       - path trovati da RL vs path trovati da Dijkstra
-        #       - Somma dei reward per ogni episodio
-        #       - Lunghezza degli episodi in termmini di step
-
-        # todo: creare la logica per cui le trajectories possono essere salvate in minibatch con osservazioni multiple,
-        #       già pronte per LSTM.
+              training_info_path=None,
+              training_losses_path=None,
+              step_verbose=False,
+              render_mode="rgb_array"):
+        self.mars_environment.render_mode = render_mode
 
         mse_loss = nn.MSELoss()
         optimizer = optim.Adam(self.policy_network.parameters(), lr=learning_rate)
@@ -111,14 +129,32 @@ class Agent:
         self.policy_network.to(device)
 
         experience_manager = ExperienceManager(batch_size=batch_size, minibatch_size=minibatch_size)
+        all_episodes_info = []
+        ppo_losses = []
 
-        # Wrap the outer loop with tqdm
-        for _ in tqdm(range(training_episodes), desc="Training Episodes"):
+        # Loop for episodes
+        for episodes_counter in tqdm(range(training_episodes), desc="Training Episodes"):
             observation, _ = self.mars_environment.reset(seed=self.seed)
             terminated = False
             truncated = False
 
+            optimal_path_no_slope = self.mars_environment.find_best_path(use_slope_cost=False)
+            optimal_path_w_slope = self.mars_environment.find_best_path(use_slope_cost=True)
+
+            info_to_save = {
+                "agent_positions": [],
+                "rewards": [],
+                "terminated": [],
+                "truncated": [],
+                "optimal_path_no_slope": [[int(pos[0]), int(pos[1])] for pos in optimal_path_no_slope],
+                "optimal_path_w_slope": [[int(pos[0]), int(pos[1])] for pos in optimal_path_w_slope],
+                "episode_length": 0,
+                "episode_number": episodes_counter,
+            }
+
             while not terminated and not truncated:
+                info_to_save["episode_length"] += 1
+
                 with torch.no_grad():
                     processed_altitudes, processed_positions = self.preprocess_model_input(observation, device)
                     action_probs, value = self.policy_network(processed_altitudes, processed_positions)
@@ -138,6 +174,11 @@ class Agent:
                     terminated=terminated
                 )
 
+                info_to_save["agent_positions"].append(observation["agent_pos"].tolist())
+                info_to_save["rewards"].append(reward)
+                info_to_save["terminated"].append(terminated)
+                info_to_save["truncated"].append(truncated)
+
                 if experience_manager.is_full():
                     print("Updating weights")
                     with torch.no_grad():
@@ -146,6 +187,7 @@ class Agent:
 
                     dataloader = experience_manager.get_batches(device=device, next_value=next_value.cpu().numpy())
 
+                    update_losses = []
                     for _ in range(epochs):
                         for altitude, position_vector, actions, old_action_probs, advantages, returns in dataloader:
                             altitude = altitude.unsqueeze(1) 
@@ -163,12 +205,34 @@ class Agent:
                             entropy = -(current_action_dist * torch.log(current_action_dist + 1e-10)).mean()
 
                             total_loss = actor_loss + (c1 * critic_loss) - (c2 * entropy)
+                            update_losses.append(total_loss.item())
+
                             optimizer.zero_grad()
                             total_loss.backward()
                             optimizer.step()
 
                     experience_manager.clear()
+                    ppo_losses.append(sum(update_losses) / len(update_losses))
+
+            all_episodes_info.append(info_to_save)
+
+        if training_info_path:
+            parent_dir = os.path.dirname(training_info_path)
+            os.makedirs(parent_dir, exist_ok=True)
+
+            with open(training_info_path, 'w') as f:
+                json.dump(all_episodes_info, f, indent=4)
+
+        if training_losses_path:
+            parent_dir = os.path.dirname(training_losses_path)
+            os.makedirs(parent_dir, exist_ok=True)
+
+            with open(training_losses_path, 'w') as f:
+                json.dump(ppo_losses, f, indent=4)
 
         if weights_path:
+            parent_dir = os.path.dirname(weights_path)
+            os.makedirs(parent_dir, exist_ok=True)
+
             print(f"Saving weights to {weights_path}")
             self.policy_network.save_weights(weights_path)

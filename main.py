@@ -2,7 +2,6 @@ import numpy as np
 import os
 import torch
 from hirise_dtm import HiriseDTM
-from custom_environment import GridMarsEnv
 from agent import Agent
 from policy_network import PolicyNetwork
 from impala import ImpalaModel
@@ -16,12 +15,14 @@ else:
 print(f"Using device: {device}")
 
 
-# todo: dare una ripulita al codice qua, farlo più comprensibile
-
 TRAINING_SEED = 42
-
 np.random.seed(TRAINING_SEED)
+
 weights_path = os.path.join('weights', 'weights.h5')
+filepath = os.path.join("DTMs", "DTEED_082989_1630_083055_1630_A01.IMG")
+training_info_path = os.path.join("training_info", "episodes_summary.json")
+training_losses_path = os.path.join("training_info", "losses.json")
+
 config = {
    "input_channels": 1,
    "vector_features": 5,
@@ -29,7 +30,7 @@ config = {
        {"type": "conv", "out_channels": 32, "kernel_size": 3, "stride": 1, "padding": 1, "activation": "relu"},
        {"type": "pool", "mode": "max", "kernel_size": 2},
        {"type": "conv", "out_channels": 64, "kernel_size": 3, "stride": 1, "padding": 1, "activation": "relu"},
-       {"type": "pool", "mode": "max", "kernel_size": 2},
+       {"type": "pool", "mode": "max", "kernel_size": 2}
    ],
    "vector_mlp": [
        {"type": "fc", "out_features": 64, "activation": "relu"},
@@ -45,41 +46,41 @@ config = {
    ]
 }
 
-filepath = "DTMs/DTEED_082989_1630_083055_1630_A01.IMG"
+
 dtm_file = HiriseDTM(filepath)
 
 TRAIN = True
 map_size = 15
-fov_distance = 3
-max_number_of_steps = 15*10
+fov_distance = map_size//5
+max_number_of_steps = map_size*10
+max_step_height = 1
+max_drop_height = 1
 
-grid_mars_env = GridMarsEnv(dtm_file,
-                            render_mode="rgb_array" if TRAIN else "human",
-                            map_size=map_size,
-                            fov_distance=fov_distance,
-                            rover_max_step=1,
-                            rover_max_drop=1,
-                            rover_max_number_of_steps=max_number_of_steps)
 
 policy_network = PolicyNetwork(config)
 # policy_network = ImpalaModel()
 
-if TRAIN:
-    agent = Agent(mars_environment=grid_mars_env,
-                  policy_network=policy_network,
-                  max_number_of_steps=max_number_of_steps,
-                  seed=TRAINING_SEED)
+agent = Agent(policy_network=policy_network,
+              fov_distance=fov_distance,
+              map_size=map_size,
+              max_number_of_steps=max_number_of_steps,
+              dtm_file=dtm_file,
+              max_step_height=max_step_height,
+              max_drop_height=max_drop_height)
 
-    agent.train(training_episodes=1000,
+if TRAIN:
+    agent.seed = TRAINING_SEED
+    agent.train(training_episodes=30000,
                 batch_size=512,
                 minibatch_size=128,
                 epochs=2,
                 weights_path=weights_path,
+                training_info_path=training_info_path,
+                training_losses_path=training_losses_path,
                 device=device,
-                step_verbose=True,
+                step_verbose=False,
                 c2=0.01)
 else:
-    policy_network(torch.randn(1, 4, map_size, map_size))
-    policy_network.load_weights(weights_path)
-    agent = Agent(mars_environment=grid_mars_env, policy_network=policy_network)
+    policy_network(torch.randn(1, 1, map_size, map_size), torch.randn(1, 5))
+    agent.policy_network.load_weights(weights_path)
     agent.run_simulation(use_policy_network=True, device=device, verbose=True, sample_action=True)

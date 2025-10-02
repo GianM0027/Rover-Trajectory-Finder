@@ -173,8 +173,6 @@ class HiriseDTM:
 
         return adjacency_list
 
-
-
     def get_lowest_highest_altitude(self):
         return np.nanmin(self.numpy_image), np.nanmax(self.numpy_image)
 

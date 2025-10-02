@@ -3,3 +3,4 @@ DTMs
 .idea
 __pycache__
 weights/*
+training_info/*

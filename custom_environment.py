@@ -424,7 +424,7 @@ class GridMarsEnv(gym.Env):
             print(row)
         print()
 
-    def find_path(self, use_slope_cost=False):
+    def find_best_path(self, use_slope_cost=False):
         start = tuple(self._agent_relative_location)
         target = tuple(self._target_location)
         step_cost = 1
