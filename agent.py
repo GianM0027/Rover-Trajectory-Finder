@@ -20,8 +20,6 @@ class Agent:
             self.policy_network.eval()
             self.policy_network.to(device)
 
-        # todo: aggiusta in base a nuovo modello
-
         n_episode = 0
         while True:
             print(f"Episode #{n_episode + 1}")
@@ -31,8 +29,8 @@ class Agent:
 
             while not terminated and not truncated:
                 if use_policy_network:
-                    processed_observation = self.preprocess_model_input(observation, device)
-                    action_probs, _ = self.policy_network(processed_observation)
+                    processed_altitudes, processed_positions = self.preprocess_model_input(observation, device)
+                    action_probs, _ = self.policy_network(processed_altitudes, processed_positions)
                     if sample_action:
                         action = torch.distributions.Categorical(action_probs).sample().item()
                     else:

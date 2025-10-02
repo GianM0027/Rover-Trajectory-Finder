@@ -105,26 +105,18 @@ class PolicyNetwork(torch.nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, altitudes, position_vector):
-        print("altitudes shape: ", altitudes.shape)
-        print("position_vector shape: ", position_vector.shape)
         
         x_cnn = altitudes
         for layer in self.backbone_layers:
             x_cnn = layer(x_cnn)
 
-        print("x_cnn_ shape: ", x_cnn.shape)
         x_cnn_flat = torch.flatten(x_cnn, start_dim=1)
 
         x_vector = position_vector
         for layer in self.mlp_layers:
             x_vector = layer(x_vector)
 
-        print("x_cnn_flat shape: ", x_cnn_flat.shape)
-        print("x_vector shape: ", x_vector.shape)
-
         x_combined = torch.cat((x_cnn_flat, x_vector), dim=1)
-
-        print("x_combined shape: ", x_combined.shape)
 
         # Build heads
         if not self.fc_built:
