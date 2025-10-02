@@ -44,8 +44,8 @@ class Agent:
                 break
 
     @classmethod
-    def preprocess_observation(cls, observation, device="cuda", return_type="torch"):
-        padding_number = -1
+    def preprocess_observation(cls, observation, device="cuda", eps=1e-4, return_type="torch"):
+        padding_number = 0
         agent_position = observation["agent"]
         target_position = observation["target"]
 
@@ -65,11 +65,11 @@ class Agent:
         channel_one = visited_locations.astype(np.float32)
 
         # Channel 2: agent position
-        channel_two = np.full(map_shape, fill_value=-1, dtype=np.float32)
+        channel_two = np.full(map_shape, fill_value=padding_number, dtype=np.float32)
         channel_two[agent_position[0], agent_position[1]] = 1.0
 
         # Channel 3: target position
-        channel_three = np.full(map_shape, fill_value=-1, dtype=np.float32)
+        channel_three = np.full(map_shape, fill_value=padding_number, dtype=np.float32)
         channel_three[target_position[0], target_position[1]] = 1.0
 
         # Stack channels
@@ -83,13 +83,14 @@ class Agent:
         if min_val == max_val:
             x[0] = np.zeros_like(altitude)
         else:
-            x[0] = (altitude - min_val) / (max_val - min_val)
+            x[0] = ((altitude - min_val) / (max_val - min_val)) + eps
         x[0][mask] = padding_number  # sentinel for NaN
 
         # Normalize channel 1 (visited locations)
         x[1] = np.log1p(x[1])
         mask = channel_one == 0.
         x[1][mask] = padding_number
+        x[1][~mask] += eps
 
         # Convert to torch tensor and add batch dimension
         return torch.tensor(x, dtype=torch.float32).unsqueeze(0).to(device)
@@ -106,6 +107,15 @@ class Agent:
               learning_rate=1e-4,
               weights_path=None,
               step_verbose=False):
+
+        # todo: salvare su file tutte le statistiche del training:
+        #       - loss
+        #       - path trovati da RL vs path trovati da Dijkstra
+        #       - Somma dei reward per ogni episodio
+        #       - Lunghezza degli episodi in termmini di step
+
+        # todo: creare la logica per cui le trajectories possono essere salvate in minibatch con osservazioni multiple,
+        #       già pronte per LSTM.
 
         mse_loss = nn.MSELoss()
         optimizer = optim.Adam(self.policy_network.parameters(), lr=learning_rate)
