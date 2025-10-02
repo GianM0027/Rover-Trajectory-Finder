@@ -60,6 +60,7 @@ class GridMarsEnv(gym.Env):
         # Using -1,-1 as "uninitialized" state
         self._agent_global_location = np.array([-1, -1], dtype=np.int32)
         self._agent_relative_location = np.array([-1, -1], dtype=np.int32)
+        self._agent_previous_relative_location = np.array([-1, -1], dtype=np.int32)
         self._target_location = np.array([-1, -1], dtype=np.int32)
 
         # Initialize local map - it will be the area extracted from the DTM where the agent will navigate
@@ -76,10 +77,10 @@ class GridMarsEnv(gym.Env):
         self._fov_mask = np.zeros([self._fov_matrix_size, self._fov_matrix_size], dtype=np.bool_)
 
         # Define what the agent can observe
-        self.observation_space = gym.spaces.Dict(
-            {
-                "agent": gym.spaces.Box(0, self.map_size - 1, shape=(2,), dtype=np.int32),    # [y, x] agent coordinates
-                "target": gym.spaces.Box(0, self.map_size - 1, shape=(2,), dtype=np.int32),   # [y, x] goal coordinates
+        self.observation_space = gym.spaces.Dict({
+                "agent_previous_pos": gym.spaces.Box(0, self.map_size - 1, shape=(2,), dtype=np.int32),    # [y, x] agent coordinates previous step
+                "agent_pos": gym.spaces.Box(0, self.map_size - 1, shape=(2,), dtype=np.int32),    # [y, x] agent coordinates
+                "target_pos": gym.spaces.Box(0, self.map_size - 1, shape=(2,), dtype=np.int32),   # [y, x] goal coordinates
 
                 # FOV maps info (what the agent sees)
                 "local_fov_values": gym.spaces.Box(min_altitude, max_altitude, shape=(self._fov_matrix_size, self._fov_matrix_size), dtype=np.float32),
@@ -206,6 +207,7 @@ class GridMarsEnv(gym.Env):
         # Check if the move is allowed
         if movements_allowed[move_index[0], move_index[1]]:
             # Update agent position, ensuring it stays within grid bounds
+            self._agent_previous_relative_location = self._agent_relative_location
             self._agent_relative_location = self._agent_relative_location + direction
             self._update_fov_coordinates()
             self.current_move_allowed_flag = True
@@ -534,8 +536,9 @@ class GridMarsEnv(gym.Env):
         """
         local_fov_values, local_fov_positions = self._get_fov_map_w_altitudes()
         return {
-            "agent": self._agent_relative_location,         # [y, x] agent relative coordinates
-            "target": self._target_location,                # [y, x] target relative coordinates
+            "agent_previous_pos": self._agent_previous_relative_location,       # [y, x] agent relative coordinates (previous step)
+            "agent_pos": self._agent_relative_location,                         # [y, x] agent relative coordinates
+            "target_pos": self._target_location,                                # [y, x] target relative coordinates
 
             # fov information
             "local_fov_values": local_fov_values,           # all altitudes in FOV

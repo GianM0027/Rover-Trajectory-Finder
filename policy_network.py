@@ -16,27 +16,27 @@ class PolicyNetwork(torch.nn.Module):
         """
             config Example:
                {
-                   "input_channels": 3,
-                   "vector_features": 5, 
-                   "backbone": [
-                       {"type": "conv", "out_channels": 32, "kernel_size": 3, "stride": 1, "padding": 1, "activation": "relu"},
-                       {"type": "pool", "mode": "max", "kernel_size": 2},
-                       {"type": "conv", "out_channels": 64, "kernel_size": 3, "stride": 1, "padding": 1, "activation": "relu"},
-                       {"type": "pool", "mode": "max", "kernel_size": 2}
-                   ],
-                   "vector_mlp": [ 
-                       {"type": "fc", "out_features": 64, "activation": "relu"},
-                       {"type": "fc", "out_features": 32, "activation": "relu"}
-                   ],
-                   "head_action": [  
-                       {"type": "fc", "out_features": 128, "activation": "relu"},
-                       {"type": "fc", "out_features": 10}
-                   ],
-                   "head_value": [
-                       {"type": "fc", "out_features": 64, "activation": "relu"},
-                       {"type": "fc", "out_features": 1}
-                   ]
-               }
+               "input_channels": 1,
+               "vector_features": 5, 
+               "backbone": [
+                   {"type": "conv", "out_channels": 32, "kernel_size": 3, "stride": 1, "padding": 1, "activation": "relu"},
+                   {"type": "pool", "mode": "max", "kernel_size": 2},
+                   {"type": "conv", "out_channels": 64, "kernel_size": 3, "stride": 1, "padding": 1, "activation": "relu"},
+                   {"type": "pool", "mode": "max", "kernel_size": 2}
+               ],
+               "vector_mlp": [ 
+                   {"type": "fc", "out_features": 64, "activation": "relu"},
+                   {"type": "fc", "out_features": 32, "activation": "relu"}
+               ],
+               "head_action": [  
+                   {"type": "fc", "out_features": 128, "activation": "relu"},
+                   {"type": "fc", "out_features": 8}
+               ],
+               "head_value": [
+                   {"type": "fc", "out_features": 64, "activation": "relu"},
+                   {"type": "fc", "out_features": 1}
+               ]
+            }
         """
         super(PolicyNetwork, self).__init__()
 
@@ -102,18 +102,14 @@ class PolicyNetwork(torch.nn.Module):
             in_features = layer_cfg["out_features"]
         return nn.Sequential(*layers)
 
-    def forward(self, matrice, vettore):
-
-        # todo: matrice va nella CNN, ha dimensione [batch_size, map_size, map_size]
-        # todo vettore va a una MLP, ha dimensione [5,]
-
-        x_cnn = matrice
+    def forward(self, altitudes, position_vector):
+        x_cnn = altitudes
         for layer in self.backbone_layers:
             x_cnn = layer(x_cnn)
-        x_cnn_flat = torch.flatten(x_cnn, 1)
 
-        x_vector = vettore
-        for layer in self.vector_mlp_layers:
+        x_cnn_flat = torch.flatten(x_cnn, 1)
+        x_vector = position_vector
+        for layer in self.mlp_layers:
             x_vector = layer(x_vector)
 
         x_combined = torch.cat((x_cnn_flat, x_vector), dim=1)

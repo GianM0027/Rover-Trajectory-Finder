@@ -9,15 +9,18 @@ from experience_manager import ExperienceManager
 
 
 class Agent:
-    def __init__(self, mars_environment: GridMarsEnv, policy_network: PolicyNetwork = None, seed=None):
-        self.mars_environment = mars_environment
+    def __init__(self, mars_environment: GridMarsEnv, policy_network: PolicyNetwork = None, max_number_of_steps=None, seed=None):
         self.seed = seed
         self.policy_network = policy_network
+        self.mars_environment = mars_environment
+        self.max_number_of_steps = max_number_of_steps
 
     def run_simulation(self, max_episodes=None, use_policy_network=False, verbose=False, device="cuda", sample_action=False):
         if use_policy_network:
             self.policy_network.eval()
             self.policy_network.to(device)
+
+        # todo: aggiusta in base a nuovo modello
 
         n_episode = 0
         while True:
@@ -28,7 +31,7 @@ class Agent:
 
             while not terminated and not truncated:
                 if use_policy_network:
-                    processed_observation = self.preprocess_observation(observation, device)
+                    processed_observation = self.preprocess_model_input(observation, device)
                     action_probs, _ = self.policy_network(processed_observation)
                     if sample_action:
                         action = torch.distributions.Categorical(action_probs).sample().item()
@@ -43,57 +46,44 @@ class Agent:
             if max_episodes is not None and n_episode >= max_episodes:
                 break
 
-    @classmethod
-    def preprocess_observation(cls, observation, device="cuda", eps=1e-4, return_type="torch"):
+    def preprocess_model_input(self, observation, device="cuda", eps=1e-4):
         padding_number = 0
-        agent_position = observation["agent"]
-        target_position = observation["target"]
+        agent_previous_position = observation["agent_previous_pos"]
+        agent_position = observation["agent_pos"]
+        target_position = observation["target_pos"]
 
         local_map = observation["local_map"]
         local_map_mask = observation["local_map_mask"]
         visited_locations = observation["visited_locations"]
         map_shape = local_map.shape
 
-        # Channel 0: altitude with mask
-        channel_zero = np.array([
+        # Altitude Matrix with MinMax normalization
+        altitudes = np.array([
             [local_map[y, x] if local_map_mask[y, x] else np.nan
              for x in range(map_shape[1])]
             for y in range(map_shape[0])
         ], dtype=np.float32)
 
-        # Channel 1: visited locations
-        channel_one = visited_locations.astype(np.float32)
-
-        # Channel 2: agent position
-        channel_two = np.full(map_shape, fill_value=padding_number, dtype=np.float32)
-        channel_two[agent_position[0], agent_position[1]] = 1.0
-
-        # Channel 3: target position
-        channel_three = np.full(map_shape, fill_value=padding_number, dtype=np.float32)
-        channel_three[target_position[0], target_position[1]] = 1.0
-
-        # Stack channels
-        x = np.stack([channel_zero, channel_one, channel_two, channel_three], axis=0)  # (C, H, W)
-
-        # Normalize channel 0 (altitude)
-        altitude = x[0]
-        mask = np.isnan(altitude)
-        min_val = np.nanmin(altitude)
-        max_val = np.nanmax(altitude)
+        mask = np.isnan(altitudes)
+        min_val = np.nanmin(altitudes)
+        max_val = np.nanmax(altitudes)
         if min_val == max_val:
-            x[0] = np.zeros_like(altitude)
+            altitudes = np.zeros_like(altitudes)
         else:
-            x[0] = ((altitude - min_val) / (max_val - min_val)) + eps
-        x[0][mask] = padding_number  # sentinel for NaN
+            altitudes = ((altitudes - min_val) / (max_val - min_val)) + eps
+        altitudes[mask] = padding_number  # sentinel for NaN
 
-        # Normalize channel 1 (visited locations)
-        x[1] = np.log1p(x[1])
-        mask = channel_one == 0.
-        x[1][mask] = padding_number
-        x[1][~mask] += eps
+        current_goal_vector = (target_position - agent_position) / map_shape[0]
+        previous_goal_vector = target_position - agent_previous_position / map_shape[0]
+        n_visits = visited_locations[agent_position[0], agent_position[1]] / self.max_number_of_steps
 
         # Convert to torch tensor and add batch dimension
-        return torch.tensor(x, dtype=torch.float32).unsqueeze(0).to(device)
+        altitudes = torch.tensor(altitudes, dtype=torch.float32).unsqueeze(0).to(device)
+
+        position_vector = [v[i] for i in range(2) for v in [current_goal_vector, previous_goal_vector]] + [n_visits]
+        position_vector = torch.tensor(position_vector, dtype=torch.float32).unsqueeze(0).to(device)
+
+        return altitudes, position_vector
 
     def train(self,
               training_episodes=1000,
@@ -132,16 +122,17 @@ class Agent:
 
             while not terminated and not truncated:
                 with torch.no_grad():
-                    processed_observation = self.preprocess_observation(observation, device)
-                    action_probs, value = self.policy_network(processed_observation)
+                    processed_altitudes, processed_positions = self.preprocess_model_input(observation, device)
+                    action_probs, value = self.policy_network(processed_altitudes, processed_positions)
                 action = torch.distributions.Categorical(action_probs).sample().item()
 
                 observation, reward, terminated, truncated, info = self.mars_environment.step(action, verbose=step_verbose)
-                processed_observation = self.preprocess_observation(observation, device)
+                processed_altitudes, processed_positions = self.preprocess_model_input(observation, device)
                 prob_of_taken_action = action_probs.squeeze()[action]
 
                 experience_manager.appendTrajectory(
-                    state=processed_observation.squeeze().cpu().numpy(),
+                    altitudes=processed_altitudes.cpu().numpy(),
+                    position_vectors=processed_positions.squeeze().cpu().numpy(),
                     action=action,
                     action_prob=prob_of_taken_action.cpu().numpy(),
                     reward=reward,
@@ -152,14 +143,14 @@ class Agent:
                 if experience_manager.is_full():
                     print("Updating weights")
                     with torch.no_grad():
-                        processed_observation = self.preprocess_observation(observation, device)
-                        _, next_value = self.policy_network(processed_observation)
+                        processed_altitudes, processed_positions = self.preprocess_model_input(observation, device)
+                        _, next_value = self.policy_network(processed_altitudes, processed_positions)
 
                     dataloader = experience_manager.get_batches(device=device, next_value=next_value.cpu().numpy())
 
                     for _ in range(epochs):
-                        for states, actions, old_action_probs, advantages, returns in dataloader:
-                            current_action_dist, values = self.policy_network(states)
+                        for altitude, position_vector, actions, old_action_probs, advantages, returns in dataloader:
+                            current_action_dist, values = self.policy_network(altitude, position_vector)
                             current_action_probs = current_action_dist.gather(
                                 dim=1,
                                 index=actions.unsqueeze(-1).to(torch.int64)
