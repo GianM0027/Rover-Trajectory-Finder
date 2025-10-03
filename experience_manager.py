@@ -17,7 +17,7 @@ class ExperienceManager:
         self.current_batch_size = 0
 
         self.experienceDict = {
-            key: [] for key in ["altitudes", "position_vectors", "actions", "action_probs", "rewards", "values", "terminated"]
+            key: [] for key in ["altitudes", "position_vectors", "actions", "action_probs", "rewards", "values", "terminated", "truncated"]
         }
 
     def clear(self):
@@ -25,7 +25,7 @@ class ExperienceManager:
         Clears the experience dictionary and resets the current batch size.
         """
         self.experienceDict = {
-            key: [] for key in ["altitudes", "position_vectors", "actions", "action_probs", "rewards", "values", "terminated"]
+            key: [] for key in ["altitudes", "position_vectors", "actions", "action_probs", "rewards", "values", "terminated", "truncated"]
         }
         self.current_batch_size = 0
 
@@ -55,7 +55,7 @@ class ExperienceManager:
         """
         return self.current_batch_size >= self.batch_size
 
-    def appendTrajectory(self, altitudes, position_vectors, action, action_prob, reward, value, terminated):
+    def appendTrajectory(self, altitudes, position_vectors, action, action_prob, reward, value, terminated, truncated):
         """
         Append a trajectory (experience at a timestep) for each environment.
 
@@ -76,45 +76,32 @@ class ExperienceManager:
         self.experienceDict["rewards"].append(reward)
         self.experienceDict["values"].append(value)
         self.experienceDict["terminated"].append(terminated)
+        self.experienceDict["truncated"].append(truncated)
 
     def compute_advantage_and_returns(self, next_value, gamma, lambda_):
         """
-        Calculate the generalized advantage estimation (GAE) and returns for each environment.
-
-        :param next_value: The value estimates for the next state (beyond the current batch of data).
-        :param gamma: Discount factor for rewards.
-        :param lambda_: Smoothing parameter for GAE.
-
-        :return: Two torch tensors containing the advantages and returns respectively.
+        Calcola la Generalized Advantage Estimation (GAE) e i returns.
+        Gestisce correttamente sia gli episodi terminati che quelli troncati.
         """
-
         rewards = self.get("rewards", return_type="np")
         values = self.get("values", return_type="np")
         terminated = self.get("terminated", return_type="np")
+        truncated = self.get("truncated", return_type="np")
+        dones = np.logical_or(terminated, truncated)
 
-        # 1. Initialize advantage array with the same shape as rewards
         env_advantages = np.zeros_like(rewards, dtype=np.float64)
         gae = 0
 
-        # Calculate returns (and GAE advantages) by iterating backwards
         for i in reversed(range(len(rewards))):
             current_next_value = values[i + 1] if i != len(rewards) - 1 else next_value
-
-            # update current_next_value and gae according to the fact that this may be a terminal state
-            current_next_value = current_next_value * (1 - terminated[i])
-            gae = gae * (1 - terminated[i])
-
-            # compute advantages
-            delta = rewards[i] + (gamma * current_next_value) - values[i]
+            bootstrap_value = current_next_value * (1 - terminated[i])
+            gae = gae * (1 - dones[i])
+            delta = rewards[i] + (gamma * bootstrap_value) - values[i]
             env_advantages[i] = gae = delta + (gamma * lambda_ * gae)
 
-        # 2. normalize the advantage
         env_advantages = (env_advantages - np.mean(env_advantages)) / (np.std(env_advantages) + 1e-10)
+        returns = env_advantages + values
 
-        # 3. Calculate returns GAE-style: GAE + Value Estimates
-        returns = [env_advantages[i] + values[i] for i in range(0, len(env_advantages))]
-
-        # 4. Return the calculated arrays
         return torch.tensor(env_advantages, dtype=torch.float32), torch.tensor(returns, dtype=torch.float32)
 
     def get_batches(self, device, next_value, td_gamma=0.999, gae_lambda=0.95, shuffle=True):

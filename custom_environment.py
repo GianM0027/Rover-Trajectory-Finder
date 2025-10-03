@@ -259,17 +259,17 @@ class GridMarsEnv(gym.Env):
         reward = 0
 
         # incremental penalty for visiting the same locations many times clipped between 0 and 5 (saturated after 100 visits)
-        visits_counter = self.visited_locations[self._agent_relative_location[0], self._agent_relative_location[1]]
-        penalty += min(5, max(0, (visits_counter-1)*0.01))
+        #visits_counter = self.visited_locations[self._agent_relative_location[0], self._agent_relative_location[1]]
+        #penalty += min(5, max(0, (visits_counter-1)*0.01))
         #reward += 0.1 if visits_counter == 1 else 0
 
         # penalize rover if it tried to perform an illegal action (e.g. bump on a wall, jump too high, ...)
-        if not self.current_move_allowed_flag:
-            penalty += 0.2
+        #if not self.current_move_allowed_flag:
+            #penalty += 0.2
 
         # penalize rover if it did not reach the target within the maximum number of steps
-        if truncated:
-            penalty += 5
+        #if truncated:
+            #penalty += 5
 
         # todo: add intermediate rewards based on distance from target (this may be dangerous - probably not good)
         if terminated and not truncated:
@@ -541,8 +541,8 @@ class GridMarsEnv(gym.Env):
             "target_pos": self._target_location,                                # [y, x] target relative coordinates
 
             # fov information
-            "local_fov_values": local_fov_values,           # all altitudes in FOV
-            "local_fov_positions": local_fov_positions,     # coordinates of FOV with local map as reference system (not global)
+            "local_fov_values": local_fov_values,            # all altitudes in FOV
+            "local_fov_positions": local_fov_positions,      # coordinates of FOV with local map as reference system (not global)
             "fov_mask": self._fov_mask.astype(np.bool_),     # boolean mask indicating which pixels are visible to the agent within the FOV
 
             # local map information

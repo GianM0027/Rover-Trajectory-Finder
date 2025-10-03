@@ -55,7 +55,7 @@ class Agent:
                     processed_altitudes, processed_positions = self.preprocess_model_input(observation, device)
                     action_probs, _ = self.policy_network(processed_altitudes, processed_positions)
                     if sample_action:
-                        action = torch.distributions.Categorical(action_probs).sample().item()
+                        action = torch.distributions.Categorical(logits=action_probs).sample().item()
                     else:
                         action = torch.argmax(action_probs).item()
                 else:
@@ -94,14 +94,15 @@ class Agent:
         altitudes[mask] = padding_number  # sentinel for NaN
 
         current_goal_vector = (target_position - agent_position) / self.mars_environment.map_size
-        previous_goal_vector = target_position - agent_previous_position / self.mars_environment.map_size
+        previous_goal_vector = (target_position - agent_previous_position) / self.mars_environment.map_size
         n_visits = visited_locations[agent_position[0], agent_position[1]] / self.max_number_of_steps
 
         # Convert to torch tensor and add batch+channel dimension
         altitudes = torch.tensor(altitudes, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to(device)
 
         # Convert to torch tensor all the positions and add batch dimension
-        position_vector = [v[i] for i in range(2) for v in [current_goal_vector, previous_goal_vector]] + [n_visits]
+        position_vector = ([v[i] for i in range(2) for v in [current_goal_vector, previous_goal_vector]] +
+                           [n_visits])
         position_vector = torch.tensor(position_vector, dtype=torch.float32).unsqueeze(0).to(device)
 
         return altitudes, position_vector
@@ -115,7 +116,7 @@ class Agent:
               clip_ratio=0.2,
               c1=0.5,
               c2=0.01,
-              learning_rate=1e-4,
+              learning_rate=1e-5,
               weights_path=None,
               training_info_path=None,
               training_losses_path=None,
@@ -169,7 +170,7 @@ class Agent:
                 with torch.no_grad():
                     processed_altitudes, processed_positions = self.preprocess_model_input(observation, device)
                     action_probs, value = self.policy_network(processed_altitudes, processed_positions)
-                action = torch.distributions.Categorical(action_probs).sample().item()
+                action = torch.distributions.Categorical(logits=action_probs).sample().item()
 
                 observation, reward, terminated, truncated, info = self.mars_environment.step(action, verbose=step_verbose)
                 processed_altitudes, processed_positions = self.preprocess_model_input(observation, device)
@@ -182,7 +183,8 @@ class Agent:
                     action_prob=prob_of_taken_action.cpu().numpy(),
                     reward=reward,
                     value=value.squeeze().cpu().numpy(),
-                    terminated=terminated
+                    terminated=terminated,
+                    truncated=truncated
                 )
 
                 info_to_save["agent_positions"].append(observation["agent_pos"].tolist())
@@ -191,7 +193,6 @@ class Agent:
                 info_to_save["truncated"].append(truncated)
 
                 if experience_manager.is_full():
-                    print("Updating weights")
                     with torch.no_grad():
                         processed_altitudes, processed_positions = self.preprocess_model_input(observation, device)
                         _, next_value = self.policy_network(processed_altitudes, processed_positions)
@@ -231,6 +232,7 @@ class Agent:
             parent_dir = os.path.dirname(training_info_path)
             os.makedirs(parent_dir, exist_ok=True)
 
+            print(f"Saving training info to {training_info_path}")
             with open(training_info_path, 'w') as f:
                 json.dump(all_episodes_info, f, indent=4)
 
@@ -238,6 +240,7 @@ class Agent:
             parent_dir = os.path.dirname(training_losses_path)
             os.makedirs(parent_dir, exist_ok=True)
 
+            print(f"Saving training loss to {training_losses_path}")
             with open(training_losses_path, 'w') as f:
                 json.dump(ppo_losses, f, indent=4)
 
