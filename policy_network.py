@@ -3,8 +3,6 @@ import torch.nn as nn
 from typing import Dict
 
 
-
-
 # todo: capire se la network può ricevere uno stack di osservazioni e comprenderne la sequenzialità, oppure se
 #       bisogna per forza aggiungere una LSTM. Guardare come viene fatto in https://arxiv.org/pdf/1802.01561
 
@@ -18,27 +16,22 @@ class PolicyNetwork(torch.nn.Module):
         """
             config Example:
                {
-               "input_channels": 1,
-               "vector_features": 5, 
-               "backbone": [
-                   {"type": "conv", "out_channels": 32, "kernel_size": 3, "stride": 1, "padding": 1, "activation": "relu"},
-                   {"type": "pool", "mode": "max", "kernel_size": 2},
-                   {"type": "conv", "out_channels": 64, "kernel_size": 3, "stride": 1, "padding": 1, "activation": "relu"},
-                   {"type": "pool", "mode": "max", "kernel_size": 2}
-               ],
-               "vector_mlp": [ 
-                   {"type": "fc", "out_features": 64, "activation": "relu"},
-                   {"type": "fc", "out_features": 32, "activation": "relu"}
-               ],
-               "head_action": [  
-                   {"type": "fc", "out_features": 128, "activation": "relu"},
-                   {"type": "fc", "out_features": 8}
-               ],
-               "head_value": [
-                   {"type": "fc", "out_features": 64, "activation": "relu"},
-                   {"type": "fc", "out_features": 1}
-               ]
-            }
+                   "input_channels": 4,
+                   "backbone": [
+                       {"type": "conv", "out_channels": 32, "kernel_size": 3, "stride": 1, "padding": 1, "activation": "relu"},
+                       {"type": "pool", "mode": "max", "kernel_size": 2},
+                       {"type": "conv", "out_channels": 64, "kernel_size": 3, "stride": 1, "padding": 1, "activation": "relu"},
+                       {"type": "pool", "mode": "max", "kernel_size": 2}
+                   ],
+                   "head_action": [  
+                       {"type": "fc", "out_features": 128, "activation": "relu"},
+                       {"type": "fc", "out_features": 8}
+                   ],
+                   "head_value": [  
+                       {"type": "fc", "out_features": 64, "activation": "relu"},
+                       {"type": "fc", "out_features": 1}
+                   ]
+               }
         """
         super(PolicyNetwork, self).__init__()
 
@@ -73,17 +66,6 @@ class PolicyNetwork(torch.nn.Module):
                                                              padding=layer_cfg.get("padding", 0)))
                 else:
                     raise NotImplementedError
-                
-        self.mlp_layers = nn.ModuleList()
-        in_features = self.config["vector_features"]
-        for layer_cfg in self.config.get("vector_mlp", []):
-            if layer_cfg["type"] == "fc":
-                fc = nn.Linear(in_features, layer_cfg["out_features"])
-                self.mlp_layers.append(fc)
-                if layer_cfg.get("activation") == "relu":
-                    self.mlp_layers.append(nn.ReLU())
-                in_features = layer_cfg["out_features"]
-
 
         # placeholder for head
         self.head_action_config = self.config["head_action"]
@@ -104,32 +86,22 @@ class PolicyNetwork(torch.nn.Module):
             in_features = layer_cfg["out_features"]
         return nn.Sequential(*layers)
 
-    def forward(self, altitudes, position_vector):
-        
-        x_cnn = altitudes
+    def forward(self, x):
         for layer in self.backbone_layers:
-            x_cnn = layer(x_cnn)
-
-        x_cnn_flat = torch.flatten(x_cnn, start_dim=1)
-
-        x_vector = position_vector
-        for layer in self.mlp_layers:
-            x_vector = layer(x_vector)
-
-        x_combined = torch.cat((x_cnn_flat, x_vector), dim=1)
+            x = layer(x)
+        x = torch.flatten(x, 1)
 
         # Build heads
         if not self.fc_built:
-            device = x_combined.device
-            combined_features = x_combined.size(1)
-            self.head_action = self._build_fc_head(self.head_action_config, combined_features).to(device)
-            self.head_value = self._build_fc_head(self.head_value_config, combined_features).to(device)
+            device = x.device
+            self.head_action = self._build_fc_head(self.head_action_config, x.size(1)).to(device)
+            self.head_value = self._build_fc_head(self.head_value_config, x.size(1)).to(device)
             self.fc_built = True
 
-        out_action = self.head_action(x_combined)
+        out_action = self.head_action(x)
         out_action = self.softmax(out_action)
 
-        out_value = self.head_value(x_combined)
+        out_value = self.head_value(x)
 
         return out_action, out_value
 

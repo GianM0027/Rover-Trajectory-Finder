@@ -17,7 +17,7 @@ class ExperienceManager:
         self.current_batch_size = 0
 
         self.experienceDict = {
-            key: [] for key in ["altitudes", "position_vectors", "actions", "action_probs", "rewards", "values", "terminated", "truncated"]
+            key: [] for key in ["states", "actions", "action_probs", "rewards", "values", "terminated", "truncated"]
         }
 
     def clear(self):
@@ -25,7 +25,7 @@ class ExperienceManager:
         Clears the experience dictionary and resets the current batch size.
         """
         self.experienceDict = {
-            key: [] for key in ["altitudes", "position_vectors", "actions", "action_probs", "rewards", "values", "terminated", "truncated"]
+            key: [] for key in ["states", "actions", "action_probs", "rewards", "values", "terminated", "truncated"]
         }
         self.current_batch_size = 0
 
@@ -55,7 +55,7 @@ class ExperienceManager:
         """
         return self.current_batch_size >= self.batch_size
 
-    def appendTrajectory(self, altitudes, position_vectors, action, action_prob, reward, value, terminated, truncated):
+    def appendTrajectory(self, state, action, action_prob, reward, value, terminated, truncated):
         """
         Append a trajectory (experience at a timestep) for each environment.
 
@@ -69,8 +69,7 @@ class ExperienceManager:
         """
         self.current_batch_size += 1
 
-        self.experienceDict["altitudes"].append(altitudes)
-        self.experienceDict["position_vectors"].append(position_vectors)
+        self.experienceDict["states"].append(state)
         self.experienceDict["actions"].append(action)
         self.experienceDict["action_probs"].append(action_prob)
         self.experienceDict["rewards"].append(reward)
@@ -116,13 +115,12 @@ class ExperienceManager:
 
         :return: A DataLoader containing the batches of experiences for training.
         """
-        altitudes = self.get("altitudes", return_type="torch").to(device)
-        position_vectors = self.get("position_vectors", return_type="torch").to(device)
+        states = self.get("states", return_type="torch").to(device)
         actions = self.get("actions", return_type="torch").to(device)
         action_probs = self.get("action_probs", return_type="torch").to(device)
         advantages, returns = self.compute_advantage_and_returns(next_value, td_gamma, gae_lambda)
         advantages = advantages.to(device)
         returns = returns.to(device)
 
-        dataset = TensorDataset(altitudes, position_vectors, actions, action_probs, advantages, returns)
+        dataset = TensorDataset(states, actions, action_probs, advantages, returns)
         return DataLoader(dataset, batch_size=self.minibatch_size, shuffle=shuffle)

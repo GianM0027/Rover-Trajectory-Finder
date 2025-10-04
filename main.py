@@ -22,30 +22,22 @@ weights_path = os.path.join('weights', 'weights.h5')
 filepath = os.path.join("DTMs", "DTEED_082989_1630_083055_1630_A01.IMG")
 training_info_path = os.path.join("training_info", "episodes_summary.json")
 training_losses_path = os.path.join("training_info", "losses.json")
+training_parameters_path = os.path.join("training_info", "training_parameters.json")
 
 config = {
-   "input_channels": 1,
-   "vector_features": 5,
-
+   "input_channels": 4,
    "backbone": [
        {"type": "conv", "out_channels": 32, "kernel_size": 3, "stride": 1, "padding": 1, "activation": "relu"},
        {"type": "pool", "mode": "max", "kernel_size": 2},
        {"type": "conv", "out_channels": 64, "kernel_size": 3, "stride": 1, "padding": 1, "activation": "relu"},
        {"type": "pool", "mode": "max", "kernel_size": 2}
    ],
-
-   "vector_mlp": [
-       {"type": "fc", "out_features": 64, "activation": "relu"},
-       {"type": "fc", "out_features": 32, "activation": "relu"}
-   ],
-
    "head_action": [
-       {"type": "fc", "out_features": 64, "activation": "relu"},
+       {"type": "fc", "out_features": 128, "activation": "relu"},
        {"type": "fc", "out_features": 8}
    ],
-
    "head_value": [
-       {"type": "fc", "out_features": 32, "activation": "relu"},
+       {"type": "fc", "out_features": 64, "activation": "relu"},
        {"type": "fc", "out_features": 1}
    ]
 }
@@ -54,15 +46,15 @@ config = {
 dtm_file = HiriseDTM(filepath)
 
 TRAIN = True
-map_size = 5
+map_size = 10
 fov_distance = map_size // 5
 max_number_of_steps = map_size*10
 max_step_height = 10
 max_drop_height = 10
 
 
-policy_network = PolicyNetwork(config)
-# policy_network = ImpalaModel()
+# policy_network = PolicyNetwork(config)
+policy_network = ImpalaModel()
 
 agent = Agent(policy_network=policy_network,
               fov_distance=fov_distance,
@@ -75,17 +67,18 @@ agent = Agent(policy_network=policy_network,
 if TRAIN:
     agent.seed = TRAINING_SEED
     agent.train(training_episodes=100,
-                batch_size=128,
+                batch_size=512,
                 minibatch_size=128,
                 epochs=3,
                 weights_path=weights_path,
                 training_info_path=training_info_path,
                 training_losses_path=training_losses_path,
+                training_parameters_path=training_parameters_path,
                 device=device,
                 step_verbose=False,
                 c2=0.01,
                 learning_rate=5e-5)
 else:
-    policy_network(torch.randn(1, 1, map_size, map_size), torch.randn(1, 5))
+    policy_network(torch.randn(1, 4, map_size, map_size))
     agent.policy_network.load_weights(weights_path)
     agent.run_simulation(use_policy_network=True, device=device, verbose=True, sample_action=True)
