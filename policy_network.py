@@ -2,10 +2,6 @@ import torch
 import torch.nn as nn
 from typing import Dict
 
-
-# todo: capire se la network può ricevere uno stack di osservazioni e comprenderne la sequenzialità, oppure se
-#       bisogna per forza aggiungere una LSTM. Guardare come viene fatto in https://arxiv.org/pdf/1802.01561
-
 # todo: ingrandire la network. Aggiungere skip connection. Attenzione a pooling che potrebbe far perdere info importanti
 #       soprattutto riguardo alle altitudini che circondano l'agente, la sua posizione e quella del target.
 #       Capire se le posizioni di agente e target è meglio passarle come vettore (y,x) invece che come canale della matrice.

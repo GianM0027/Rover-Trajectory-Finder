@@ -202,6 +202,7 @@ class Agent:
             }
 
             while not terminated and not truncated:
+                # fare action skipping, frame skipping con k = 2 per il momento, passare alla CNN [b, c*k, map, map]
                 info_to_save["episode_length"] += 1
 
                 with torch.no_grad():
