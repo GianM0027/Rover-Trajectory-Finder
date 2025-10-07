@@ -1,6 +1,8 @@
 import json
 import os
 import random
+from collections import deque
+
 import torch
 from torch import nn, optim
 from tqdm import tqdm
@@ -37,7 +39,14 @@ class Agent:
             rover_max_drop=max_drop_height,
             rover_max_number_of_steps=max_number_of_steps)
 
-    def run_simulation(self, max_episodes=None, use_policy_network=False, verbose=False, device="cuda", sample_action=False, render_mode="human"):
+    def run_simulation(self,
+                       max_episodes=None,
+                       use_policy_network=False,
+                       verbose=False,
+                       device="cuda",
+                       sample_action=False,
+                       render_mode="human",
+                       frame_skip_len=4):  # Add this parameter
         self.mars_environment.render_mode = render_mode
         if use_policy_network:
             self.policy_network.eval()
@@ -50,19 +59,37 @@ class Agent:
             terminated = False
             truncated = False
 
+            # --- 1. Initialize the deque for the new episode ---
+            if use_policy_network:
+                frame_deque = deque(maxlen=frame_skip_len)
+                processed_frame = self.preprocess_observation_single_matrix(observation, device=device)
+                # Fill the deque by duplicating the first frame
+                for _ in range(frame_skip_len):
+                    frame_deque.append(processed_frame)
+
             while not terminated and not truncated:
                 if use_policy_network:
-                    processed_observation = self.preprocess_observation_single_matrix(observation, device)
-                    action_probs, value = self.policy_network(processed_observation)
+                    # --- 2. Stack the frames from the deque to create the state ---
+                    current_state_stack = torch.cat(list(frame_deque), dim=1)
+
+                    # --- 3. The network receives the STACKED state ---
+                    with torch.no_grad():
+                        action_probs, value = self.policy_network(current_state_stack)
 
                     if sample_action:
-                        action = torch.distributions.Categorical(logits=action_probs).sample().item()
+                        action = torch.distributions.Categorical(probs=action_probs).sample().item()
                     else:
                         action = torch.argmax(action_probs).item()
                 else:
                     action = np.random.randint(8)
 
+                # Perform a single step in the environment
                 observation, reward, terminated, truncated, info = self.mars_environment.step(action, verbose=verbose)
+
+                # --- 4. Update the deque with the new frame ---
+                if use_policy_network:
+                    processed_new_frame = self.preprocess_observation_single_matrix(observation, device=device)
+                    frame_deque.append(processed_new_frame)
 
             n_episode += 1
             if max_episodes is not None and n_episode >= max_episodes:
@@ -130,6 +157,7 @@ class Agent:
               c1=0.5,
               c2=0.01,
               learning_rate=1e-5,
+              frame_skip_len=1,
               weights_path=None,
               training_info_path=None,
               training_losses_path=None,
@@ -177,6 +205,12 @@ class Agent:
             terminated = False
             truncated = False
 
+            # 1. Initialize the frame stack at the beginning of the episode
+            frame_deque = deque(maxlen=frame_skip_len)
+            processed_frame = self.preprocess_observation_single_matrix(observation, device)
+            for _ in range(frame_skip_len):
+                frame_deque.append(processed_frame)
+
             # Retrieve optimal paths and check whether there is one
             optimal_path_no_slope = self.mars_environment.find_best_path(use_slope_cost=False)
             optimal_path_w_slope = self.mars_environment.find_best_path(use_slope_cost=True)
@@ -202,40 +236,47 @@ class Agent:
             }
 
             while not terminated and not truncated:
-                # fare action skipping, frame skipping con k = 2 per il momento, passare alla CNN [b, c*k, map, map]
-                info_to_save["episode_length"] += 1
-
+                current_state_stack = torch.cat(list(frame_deque), dim=1)
                 with torch.no_grad():
-                    processed_observation = self.preprocess_observation_single_matrix(observation, device)
-                    action_probs, value = self.policy_network(processed_observation)
-
-                action = torch.distributions.Categorical(logits=action_probs).sample().item()
-
-                observation, reward, terminated, truncated, info = self.mars_environment.step(action, verbose=step_verbose)
-                processed_observation = self.preprocess_observation_single_matrix(observation, device)
+                    action_probs, value = self.policy_network(current_state_stack)
+                action = torch.distributions.Categorical(probs=action_probs).sample().item()
                 prob_of_taken_action = action_probs.squeeze()[action]
 
+                # --- Perform the action skip ---
+                frame_skip_reward = 0
+                for _ in range(frame_skip_len):
+                    info_to_save["episode_length"] += 1
+                    observation, reward, terminated, truncated, info = self.mars_environment.step(action, verbose=step_verbose)
+
+                    # Add the new frame to the deque (the oldest is automatically dropped)
+                    processed_new_frame = self.preprocess_observation_single_matrix(observation, device)
+                    frame_deque.append(processed_new_frame)
+
+                    frame_skip_reward += reward
+
+                    if terminated or truncated:
+                        break
+
+                next_state_stack = torch.cat(list(frame_deque), dim=1)
+
                 experience_manager.appendTrajectory(
-                    state=processed_observation.squeeze().cpu().numpy(),
+                    state=current_state_stack.squeeze().cpu().numpy(),      # The state used for the decision
+                    next_state=next_state_stack.squeeze().cpu().numpy(),    # The resulting state
                     action=action,
                     action_prob=prob_of_taken_action.cpu().numpy(),
-                    reward=reward,
+                    reward=frame_skip_reward,
                     value=value.squeeze().cpu().numpy(),
                     terminated=terminated,
                     truncated=truncated
                 )
 
                 info_to_save["agent_positions"].append(observation["agent_pos"].tolist())
-                info_to_save["rewards"].append(reward)
+                info_to_save["rewards"].append(frame_skip_reward)
                 info_to_save["terminated"].append(terminated)
                 info_to_save["truncated"].append(truncated)
 
                 if experience_manager.is_full():
-                    with torch.no_grad():
-                        processed_observation = self.preprocess_observation_single_matrix(observation, device)
-                        _, next_value = self.policy_network(processed_observation)
-
-                    dataloader = experience_manager.get_batches(device=device, next_value=next_value.cpu().numpy())
+                    dataloader = experience_manager.get_batches(policy_network=self.policy_network, device=device)
 
                     update_losses = []
                     for _ in range(epochs):

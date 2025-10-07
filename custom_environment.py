@@ -273,7 +273,7 @@ class GridMarsEnv(gym.Env):
 
         # todo: add intermediate rewards based on distance from target (this may be dangerous - probably not good)
         if terminated and not truncated:
-            reward += 10
+            reward += 1
 
         return reward - penalty
 

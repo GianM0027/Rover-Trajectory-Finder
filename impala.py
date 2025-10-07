@@ -61,12 +61,12 @@ class ImpalaModel(nn.Module):
     def __init__(self, action_space=8):
         super(ImpalaModel, self).__init__()
 
-        self.conv_block1 = ConvolutionalBlock(4, 16)
+        self.conv_block1 = ConvolutionalBlock(8, 16)
         self.conv_block2 = ConvolutionalBlock(16, 32)
         self.conv_block3 = ConvolutionalBlock(32, 32)
 
         # Remaining parts of the model
-        self.feed_forward = nn.Linear(128, 64)
+        self.feed_forward = nn.Linear(288, 64)
 
         self.policy_head = nn.Linear(64, action_space)
         self.value_head = nn.Linear(64, 1)

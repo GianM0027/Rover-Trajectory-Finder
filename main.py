@@ -25,12 +25,14 @@ training_losses_path = os.path.join("training_info", "losses.json")
 training_parameters_path = os.path.join("training_info", "training_parameters.json")
 
 config = {
-   "input_channels": 4,
+   "input_channels": 8,
    "backbone": [
+       {"type": "conv", "out_channels": 16, "kernel_size": 3, "stride": 1, "padding": 1, "activation": "relu"},
+       {"type": "pool", "mode": "max", "kernel_size": 2},
        {"type": "conv", "out_channels": 32, "kernel_size": 3, "stride": 1, "padding": 1, "activation": "relu"},
        {"type": "pool", "mode": "max", "kernel_size": 2},
        {"type": "conv", "out_channels": 64, "kernel_size": 3, "stride": 1, "padding": 1, "activation": "relu"},
-       {"type": "pool", "mode": "max", "kernel_size": 2}
+       #{"type": "pool", "mode": "max", "kernel_size": 2}
    ],
    "head_action": [
        {"type": "fc", "out_features": 128, "activation": "relu"},
@@ -46,12 +48,12 @@ config = {
 dtm_file = HiriseDTM(filepath)
 
 TRAIN = True
-map_size = 10
+map_size = 20
 fov_distance = map_size // 5
 max_number_of_steps = map_size*10
 max_step_height = 10
 max_drop_height = 10
-
+frame_skip_len = 2
 
 # policy_network = PolicyNetwork(config)
 policy_network = ImpalaModel()
@@ -66,10 +68,11 @@ agent = Agent(policy_network=policy_network,
 
 if TRAIN:
     agent.seed = TRAINING_SEED
-    agent.train(training_episodes=100,
-                batch_size=512,
+    agent.train(training_episodes=1000,
+                batch_size=256,
                 minibatch_size=128,
-                epochs=3,
+                epochs=2,
+                frame_skip_len=frame_skip_len,
                 weights_path=weights_path,
                 training_info_path=training_info_path,
                 training_losses_path=training_losses_path,
@@ -77,8 +80,8 @@ if TRAIN:
                 device=device,
                 step_verbose=False,
                 c2=0.01,
-                learning_rate=5e-5)
+                learning_rate=1e-6)
 else:
-    policy_network(torch.randn(1, 4, map_size, map_size))
+    policy_network(torch.randn(1, 4*frame_skip_len, map_size, map_size))
     agent.policy_network.load_weights(weights_path)
-    agent.run_simulation(use_policy_network=True, device=device, verbose=True, sample_action=True)
+    agent.run_simulation(use_policy_network=True, frame_skip_len=frame_skip_len, device=device, verbose=True, sample_action=True)
