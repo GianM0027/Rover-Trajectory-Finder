@@ -46,7 +46,7 @@ class Agent:
                        device="cuda",
                        sample_action=False,
                        render_mode="human",
-                       frame_skip_len=4):  # Add this parameter
+                       n_actions=8):
         self.mars_environment.render_mode = render_mode
         if use_policy_network:
             self.policy_network.eval()
@@ -59,51 +59,32 @@ class Agent:
             terminated = False
             truncated = False
 
-            # --- 1. Initialize the deque for the new episode ---
-            if use_policy_network:
-                frame_deque = deque(maxlen=frame_skip_len)
-                processed_frame = self.preprocess_observation_single_matrix(observation, device=device)
-                # Fill the deque by duplicating the first frame
-                for _ in range(frame_skip_len):
-                    frame_deque.append(processed_frame)
-
             while not terminated and not truncated:
                 if use_policy_network:
-                    # --- 2. Stack the frames from the deque to create the state ---
-                    current_state_stack = torch.cat(list(frame_deque), dim=1)
-
-                    # --- 3. The network receives the STACKED state ---
                     with torch.no_grad():
-                        action_probs, value = self.policy_network(current_state_stack)
+                        processed_frame = self.preprocess_observation_single_matrix(observation, device=device)
+                        action_probs, _ = self.policy_network(processed_frame)
 
                     if sample_action:
                         action = torch.distributions.Categorical(probs=action_probs).sample().item()
                     else:
                         action = torch.argmax(action_probs).item()
                 else:
-                    action = np.random.randint(8)
+                    action = np.random.randint(n_actions)
 
-                # Perform a single step in the environment
-                observation, reward, terminated, truncated, info = self.mars_environment.step(action, verbose=verbose)
-
-                # --- 4. Update the deque with the new frame ---
-                if use_policy_network:
-                    processed_new_frame = self.preprocess_observation_single_matrix(observation, device=device)
-                    frame_deque.append(processed_new_frame)
+                observation, reward, terminated, truncated, _ = self.mars_environment.step(action, verbose=verbose)
 
             n_episode += 1
             if max_episodes is not None and n_episode >= max_episodes:
                 break
 
-    @classmethod
-    def preprocess_observation_single_matrix(cls, observation, device="cuda", eps=1e-4):
+    def preprocess_observation_single_matrix(self, observation, device="cuda", eps=1e-4):
         padding_number = 0
         agent_position = observation["agent_pos"]
         target_position = observation["target_pos"]
 
         local_map = observation["local_map"]
         local_map_mask = observation["local_map_mask"]
-        visited_locations = observation["visited_locations"]
         map_shape = local_map.shape
 
         # Channel 0: altitude with mask
@@ -112,40 +93,28 @@ class Agent:
              for x in range(map_shape[1])]
             for y in range(map_shape[0])
         ], dtype=np.float32)
+        
+        padding_mask = np.isnan(channel_zero)
+        min_val, max_val = self.dtm_file.get_lowest_highest_altitude()
+        if min_val == max_val:
+            channel_zero = np.zeros_like(channel_zero)
+        else:
+            channel_zero = ((channel_zero - min_val) / (max_val - min_val)) + eps
+        channel_zero[padding_mask] = padding_number
 
-        # Channel 1: visited locations
-        channel_one = visited_locations.astype(np.float32)
+        # Channel 1: agent position
+        channel_one = np.full(map_shape, fill_value=padding_number, dtype=np.float32)
+        channel_one[agent_position[0], agent_position[1]] = 1.0
 
-        # Channel 2: agent position
+        # Channel 2: target position
         channel_two = np.full(map_shape, fill_value=padding_number, dtype=np.float32)
-        channel_two[agent_position[0], agent_position[1]] = 1.0
-
-        # Channel 3: target position
-        channel_three = np.full(map_shape, fill_value=padding_number, dtype=np.float32)
-        channel_three[target_position[0], target_position[1]] = 1.0
+        channel_two[target_position[0], target_position[1]] = 1.0
 
         # Stack channels
-        x = np.stack([channel_zero, channel_one, channel_two, channel_three], axis=0)  # (C, H, W)
+        x = np.stack([channel_zero, channel_one, channel_two], axis=0)
+        tensor = torch.tensor(x, dtype=torch.float32).unsqueeze(0).to(device)
 
-        # Normalize channel 0 (altitude)
-        altitude = x[0]
-        mask = np.isnan(altitude)
-        min_val = np.nanmin(altitude)
-        max_val = np.nanmax(altitude)
-        if min_val == max_val:
-            x[0] = np.zeros_like(altitude)
-        else:
-            x[0] = ((altitude - min_val) / (max_val - min_val)) + eps
-        x[0][mask] = padding_number  # sentinel for NaN
-
-        # Normalize channel 1 (visited locations)
-        x[1] = np.log1p(x[1])
-        mask = channel_one == 0.
-        x[1][mask] = padding_number
-        x[1][~mask] += eps
-
-        # Convert to torch tensor and add batch dimension
-        return torch.tensor(x, dtype=torch.float32).unsqueeze(0).to(device)
+        return tensor
 
     def train(self,
               training_episodes=1000,
@@ -157,13 +126,13 @@ class Agent:
               c1=0.5,
               c2=0.01,
               learning_rate=1e-5,
-              frame_skip_len=1,
               weights_path=None,
               training_info_path=None,
               training_losses_path=None,
               training_parameters_path=None,
               step_verbose=False,
-              render_mode="rgb_array"):
+              render_mode="rgb_array",
+              save_interval=1000):
         self.mars_environment.render_mode = render_mode
 
         mse_loss = nn.MSELoss()
@@ -200,16 +169,10 @@ class Agent:
                 json.dump(training_parameters, f, indent=4)
 
         # Loop for episodes
-        for _ in tqdm(range(training_episodes), desc="Training Episodes"):
+        for episode_counter in tqdm(range(training_episodes), desc="Training Episodes"):
             observation, _ = self.mars_environment.reset(seed=self.seed)
             terminated = False
             truncated = False
-
-            # 1. Initialize the frame stack at the beginning of the episode
-            frame_deque = deque(maxlen=frame_skip_len)
-            processed_frame = self.preprocess_observation_single_matrix(observation, device)
-            for _ in range(frame_skip_len):
-                frame_deque.append(processed_frame)
 
             # Retrieve optimal paths and check whether there is one
             optimal_path_no_slope = self.mars_environment.find_best_path(use_slope_cost=False)
@@ -228,56 +191,44 @@ class Agent:
             info_to_save = {
                 "agent_positions": [],
                 "rewards": [],
-                "terminated": [],
-                "truncated": [],
+                "terminated": False,
+                "truncated": False,
                 "optimal_path_no_slope": optimal_path_no_slope,
                 "optimal_path_w_slope": optimal_path_w_slope,
                 "episode_length": 0
             }
 
             while not terminated and not truncated:
-                current_state_stack = torch.cat(list(frame_deque), dim=1)
                 with torch.no_grad():
-                    action_probs, value = self.policy_network(current_state_stack)
+                    processed_frame = self.preprocess_observation_single_matrix(observation, device=device)
+                    action_probs, value = self.policy_network(processed_frame)
                 action = torch.distributions.Categorical(probs=action_probs).sample().item()
                 prob_of_taken_action = action_probs.squeeze()[action]
 
-                # --- Perform the action skip ---
-                frame_skip_reward = 0
-                for _ in range(frame_skip_len):
-                    info_to_save["episode_length"] += 1
-                    observation, reward, terminated, truncated, info = self.mars_environment.step(action, verbose=step_verbose)
-
-                    # Add the new frame to the deque (the oldest is automatically dropped)
-                    processed_new_frame = self.preprocess_observation_single_matrix(observation, device)
-                    frame_deque.append(processed_new_frame)
-
-                    frame_skip_reward += reward
-
-                    if terminated or truncated:
-                        break
-
-                next_state_stack = torch.cat(list(frame_deque), dim=1)
-
+                info_to_save["episode_length"] += 1
+                observation, reward, terminated, truncated, _ = self.mars_environment.step(action, verbose=step_verbose)
+                
                 experience_manager.appendTrajectory(
-                    state=current_state_stack.squeeze().cpu().numpy(),      # The state used for the decision
-                    next_state=next_state_stack.squeeze().cpu().numpy(),    # The resulting state
+                    state=processed_frame.squeeze().cpu().numpy(),
                     action=action,
                     action_prob=prob_of_taken_action.cpu().numpy(),
-                    reward=frame_skip_reward,
+                    reward=reward,
                     value=value.squeeze().cpu().numpy(),
                     terminated=terminated,
                     truncated=truncated
                 )
 
                 info_to_save["agent_positions"].append(observation["agent_pos"].tolist())
-                info_to_save["rewards"].append(frame_skip_reward)
-                info_to_save["terminated"].append(terminated)
-                info_to_save["truncated"].append(truncated)
+                info_to_save["rewards"].append(reward)
+                info_to_save["terminated"] = terminated
+                info_to_save["truncated"] = truncated
 
                 if experience_manager.is_full():
-                    dataloader = experience_manager.get_batches(policy_network=self.policy_network, device=device)
-
+                    with torch.no_grad():
+                        processed_frame = self.preprocess_observation_single_matrix(observation, device=device)
+                        _, next_value = self.policy_network(processed_frame)
+                    
+                    dataloader = experience_manager.get_batches(next_value=next_value, device=device)
                     update_losses = []
                     for _ in range(epochs):
                         for states, actions, old_action_probs, advantages, returns in dataloader:
@@ -306,14 +257,11 @@ class Agent:
 
             all_episodes_info.append(info_to_save)
 
-        if training_info_path:
-            parent_dir = os.path.dirname(training_info_path)
-            os.makedirs(parent_dir, exist_ok=True)
+            if (episode_counter % save_interval == 0 and episode_counter > 0) or (episode_counter == training_episodes - 1):
+                self._save_training_info(training_losses_path, ppo_losses, training_info_path, all_episodes_info, weights_path)
 
-            print(f"Saving training info to {training_info_path}")
-            with open(training_info_path, 'w') as f:
-                json.dump(all_episodes_info, f, indent=4)
 
+    def _save_training_info(self, training_losses_path, ppo_losses, training_info_path, all_episodes_info, weights_path):
         if training_losses_path:
             parent_dir = os.path.dirname(training_losses_path)
             os.makedirs(parent_dir, exist_ok=True)
@@ -321,6 +269,14 @@ class Agent:
             print(f"Saving training loss to {training_losses_path}")
             with open(training_losses_path, 'w') as f:
                 json.dump(ppo_losses, f, indent=4)
+
+        if training_info_path:
+            parent_dir = os.path.dirname(training_info_path)
+            os.makedirs(parent_dir, exist_ok=True)
+
+            print(f"Saving training info to {training_info_path}")
+            with open(training_info_path, 'w') as f:
+                json.dump(all_episodes_info, f, indent=4)
 
         if weights_path:
             parent_dir = os.path.dirname(weights_path)

@@ -25,38 +25,34 @@ training_losses_path = os.path.join("training_info", "losses.json")
 training_parameters_path = os.path.join("training_info", "training_parameters.json")
 
 config = {
-   "input_channels": 8,
-   "backbone": [
-       {"type": "conv", "out_channels": 16, "kernel_size": 3, "stride": 1, "padding": 1, "activation": "relu"},
-       {"type": "pool", "mode": "max", "kernel_size": 2},
-       {"type": "conv", "out_channels": 32, "kernel_size": 3, "stride": 1, "padding": 1, "activation": "relu"},
-       {"type": "pool", "mode": "max", "kernel_size": 2},
-       {"type": "conv", "out_channels": 64, "kernel_size": 3, "stride": 1, "padding": 1, "activation": "relu"},
-       #{"type": "pool", "mode": "max", "kernel_size": 2}
-   ],
-   "head_action": [
-       {"type": "fc", "out_features": 128, "activation": "relu"},
-       {"type": "fc", "out_features": 8}
-   ],
-   "head_value": [
-       {"type": "fc", "out_features": 64, "activation": "relu"},
-       {"type": "fc", "out_features": 1}
-   ]
+    "input_channels": 3,
+    "backbone": [
+        {"type": "conv", "out_channels": 32, "kernel_size": 3, "stride": 1, "padding": 1, "activation": "relu"},
+        {"type": "conv", "out_channels": 64, "kernel_size": 3, "stride": 1, "padding": 1, "activation": "relu"},
+        {"type": "conv", "out_channels": 128, "kernel_size": 3, "stride": 1, "padding": 1, "activation": "relu"}
+    ],
+    "head_action": [
+        {"type": "fc", "out_features": 64, "activation": "relu"},
+        {"type": "fc", "out_features": 32, "activation": "relu"},
+        {"type": "fc", "out_features": 8}
+    ],
+    "head_value": [
+        {"type": "fc", "out_features": 64, "activation": "relu"},
+        {"type": "fc", "out_features": 1}
+    ]
 }
-
 
 dtm_file = HiriseDTM(filepath)
 
 TRAIN = True
-map_size = 20
+map_size = 10
 fov_distance = map_size // 5
 max_number_of_steps = map_size*10
-max_step_height = 10
-max_drop_height = 10
-frame_skip_len = 2
+max_step_height = 1
+max_drop_height = 1
 
-# policy_network = PolicyNetwork(config)
-policy_network = ImpalaModel()
+policy_network = PolicyNetwork(config)
+#policy_network = ImpalaModel(input_channels=4)
 
 agent = Agent(policy_network=policy_network,
               fov_distance=fov_distance,
@@ -68,20 +64,18 @@ agent = Agent(policy_network=policy_network,
 
 if TRAIN:
     agent.seed = TRAINING_SEED
-    agent.train(training_episodes=1000,
-                batch_size=256,
-                minibatch_size=128,
-                epochs=2,
-                frame_skip_len=frame_skip_len,
+    agent.train(training_episodes=100000,
+                batch_size=512,
+                minibatch_size=256,
+                epochs=3,
                 weights_path=weights_path,
                 training_info_path=training_info_path,
                 training_losses_path=training_losses_path,
                 training_parameters_path=training_parameters_path,
                 device=device,
                 step_verbose=False,
-                c2=0.01,
-                learning_rate=1e-6)
+                learning_rate=5e-5)
 else:
-    policy_network(torch.randn(1, 4*frame_skip_len, map_size, map_size))
+    policy_network(torch.randn(1, 2, map_size, map_size))
     agent.policy_network.load_weights(weights_path)
-    agent.run_simulation(use_policy_network=True, frame_skip_len=frame_skip_len, device=device, verbose=True, sample_action=True)
+    agent.run_simulation(use_policy_network=True, device=device, verbose=True, sample_action=False)

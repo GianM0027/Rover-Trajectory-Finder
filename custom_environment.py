@@ -4,6 +4,8 @@ from collections import deque
 import numpy as np
 import gymnasium as gym
 from typing import Optional
+
+from sniffio import current_async_library
 from hirise_dtm import HiriseDTM
 import pygame
 
@@ -203,6 +205,7 @@ class GridMarsEnv(gym.Env):
 
         # Convert the direction (dx, dy) into an index in the 3x3 movements_allowed matrix, to retrieve whether that direction is allowed
         move_index = (1 + direction[0], 1 + direction[1])
+        distance_before = self._get_manhattan_distance(self._agent_relative_location, self._target_location)
 
         # Check if the move is allowed
         if movements_allowed[move_index[0], move_index[1]]:
@@ -228,7 +231,7 @@ class GridMarsEnv(gym.Env):
         truncated = self.rover_max_number_of_steps == self.rover_steps_counter
 
         # Current reward
-        reward = self._compute_reward(terminated, truncated)
+        reward = self._compute_reward(terminated, truncated, distance_before)
 
         # todo: create an energy consumption mechanism depending on the slope.
         #       E.g if last pixel was higher than current -> self.rover_steps_counter += 0.5 instead of 1
@@ -254,26 +257,23 @@ class GridMarsEnv(gym.Env):
 
         return observation, reward, terminated, truncated, info
 
-    def _compute_reward(self, terminated, truncated):
-        penalty = 0
-        reward = 0
+    def _compute_reward(self, terminated, truncated, distance_before):
+        reward = 0.0
+        penalty = 0.0
 
-        # incremental penalty for visiting the same locations many times clipped between 0 and 5 (saturated after 100 visits)
-        #visits_counter = self.visited_locations[self._agent_relative_location[0], self._agent_relative_location[1]]
-        #penalty += min(5, max(0, (visits_counter-1)*0.01))
-        #reward += 0.1 if visits_counter == 1 else 0
+        # Penalty for not reaching the target - for efficiency. Not given if current manhattan distance is < than previous
+        current_distance = self._get_manhattan_distance(self._agent_relative_location, self._target_location)
+        if current_distance >= distance_before:
+            penalty += 0.05
 
-        # penalize rover if it tried to perform an illegal action (e.g. bump on a wall, jump too high, ...)
-        #if not self.current_move_allowed_flag:
-            #penalty += 0.2
-
-        # penalize rover if it did not reach the target within the maximum number of steps
-        #if truncated:
-            #penalty += 5
-
-        # todo: add intermediate rewards based on distance from target (this may be dangerous - probably not good)
+        # Penalty for revisiting the same spot too many times.
+        """visits_counter = self.visited_locations[self._agent_relative_location[0], self._agent_relative_location[1]]
+        if visits_counter > 2:
+            penalty += 0.02"""
+        
+        # Big reward for reaching the goal
         if terminated and not truncated:
-            reward += 1
+            reward += 10
 
         return reward - penalty
 
@@ -424,17 +424,19 @@ class GridMarsEnv(gym.Env):
             print(row)
         print()
 
-    def find_best_path(self, use_slope_cost=False):
+    def find_best_path(self, use_slope_cost=False, use_only_detected_altitudes=False):
         start = tuple(self._agent_relative_location)
         target = tuple(self._target_location)
-        step_cost = 1
+        
+        if use_only_detected_altitudes:
+            if not self._detected_altitudes[start] or not self._detected_altitudes[target]:
+                return None
 
-        # local adjacency list
         adjacency_list = self._dtm.get_adjacency_list(moves=self._action_to_direction,
-                                                      max_step=self.rover_max_step,
-                                                      max_drop=self.rover_max_drop,
-                                                      local_map_size=self.map_size,
-                                                      local_map_position=self._local_map_position)
+                                                    max_step=self.rover_max_step,
+                                                    max_drop=self.rover_max_drop,
+                                                    local_map_size=self.map_size,
+                                                    local_map_position=self._local_map_position)
 
         # Dijkstra: priority queue [(cost, node)]
         heap = [(0, start)]
@@ -445,27 +447,31 @@ class GridMarsEnv(gym.Env):
             current_cost, node = heapq.heappop(heap)
 
             if node == target:
-                # reconstruct path
                 path = []
                 while node is not None:
                     path.append(node)
                     node = parent[node]
                 return np.array(path[::-1], dtype=object)
 
-            # If node was already reached with lower cost, skip
             if current_cost > costs[node]:
                 continue
 
             for neighbor in adjacency_list.get(node, []):
-                # compute cost for moving
+                # Ignoring nodes whose altitude is unknown if the flag is set
+                if use_only_detected_altitudes and not self._detected_altitudes[neighbor[0], neighbor[1]]:
+                    continue
+                 
+                edge_cost = 1.0
 
                 if use_slope_cost:
                     y1, x1 = node
                     y2, x2 = neighbor
-                    diff = min(step_cost, max(-step_cost, self._local_map[y2, x2] - self._local_map[y1, x1]))
-                    step_cost += diff
+                    
+                    altitude_diff = self._local_map[y2, x2] - self._local_map[y1, x1]
+                    
+                    edge_cost += abs(altitude_diff) * 0.5 
 
-                new_cost = current_cost + step_cost
+                new_cost = current_cost + edge_cost
 
                 if neighbor not in costs or new_cost < costs[neighbor]:
                     costs[neighbor] = new_cost
@@ -567,3 +573,7 @@ class GridMarsEnv(gym.Env):
             "agent_global_position": self._agent_global_location,
             "target_position": self._target_location,
         }
+
+    @classmethod
+    def _get_manhattan_distance(cls, pos1, pos2):
+        return np.abs(pos1[0] - pos2[0]) + np.abs(pos1[1] - pos2[1])

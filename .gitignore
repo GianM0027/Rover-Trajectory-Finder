@@ -4,3 +4,4 @@ DTMs
 __pycache__
 weights/*
 training_info/*
+.vscode

@@ -58,10 +58,10 @@ class ConvolutionalBlock(nn.Module):
 
 
 class ImpalaModel(nn.Module):
-    def __init__(self, action_space=8):
+    def __init__(self, action_space=8, input_channels=8):
         super(ImpalaModel, self).__init__()
 
-        self.conv_block1 = ConvolutionalBlock(8, 16)
+        self.conv_block1 = ConvolutionalBlock(input_channels, 16)
         self.conv_block2 = ConvolutionalBlock(16, 32)
         self.conv_block3 = ConvolutionalBlock(32, 32)
 

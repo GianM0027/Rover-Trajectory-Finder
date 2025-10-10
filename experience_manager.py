@@ -17,7 +17,7 @@ class ExperienceManager:
         self.current_batch_size = 0
 
         self.experienceDict = {
-            key: [] for key in ["states", "next_states", "actions", "action_probs", "rewards", "values", "terminated", "truncated"]
+            key: [] for key in ["states", "actions", "action_probs", "rewards", "values", "terminated", "truncated"]
         }
 
     def clear(self):
@@ -25,7 +25,7 @@ class ExperienceManager:
         Clears the experience dictionary and resets the current batch size.
         """
         self.experienceDict = {
-            key: [] for key in ["states", "next_states", "actions", "action_probs", "rewards", "values", "terminated", "truncated"]
+            key: [] for key in ["states", "actions", "action_probs", "rewards", "values", "terminated", "truncated"]
         }
         self.current_batch_size = 0
 
@@ -55,7 +55,7 @@ class ExperienceManager:
         """
         return self.current_batch_size >= self.batch_size
 
-    def appendTrajectory(self, state, next_state, action, action_prob, reward, value, terminated, truncated):
+    def appendTrajectory(self, state, action, action_prob, reward, value, terminated, truncated):
         """
         Append a trajectory (experience at a timestep) for each environment.
 
@@ -70,7 +70,6 @@ class ExperienceManager:
         self.current_batch_size += 1
 
         self.experienceDict["states"].append(state)
-        self.experienceDict["next_states"].append(next_state)
         self.experienceDict["actions"].append(action)
         self.experienceDict["action_probs"].append(action_prob)
         self.experienceDict["rewards"].append(reward)
@@ -78,36 +77,52 @@ class ExperienceManager:
         self.experienceDict["terminated"].append(terminated)
         self.experienceDict["truncated"].append(truncated)
 
-    def compute_advantage_and_returns(self, next_values, gamma, lambda_):
+
+    def compute_advantage_and_returns(self, next_value, gamma, lambda_):
         """
-        Calculates GAE using the explicitly provided next_values.
+        Calculate the generalized advantage estimation (GAE) and returns for each environment.
+
+        @param next_values: The value estimates for the next state (beyond the current batch of data).
+        @param gamma: Discount factor for rewards.
+        @param lambda_: Smoothing parameter for GAE.
+        @return: Two torch tensors containing the advantages and returns respectively.
         """
+        
         rewards = self.get("rewards", return_type="np")
         values = self.get("values", return_type="np")
         terminated = self.get("terminated", return_type="np")
+        truncated = self.get("truncated", return_type="np")
+        dones = np.logical_or(terminated, truncated)
+        gae = 0
 
-        advantages = np.zeros_like(rewards, dtype=np.float32)
-        gae = 0.0
-        for t in reversed(range(len(rewards))):
-            v_next = next_values[t] * (1 - terminated[t])
-            delta = rewards[t] + gamma * v_next - values[t]
-            advantages[t] = gae = delta + gamma * lambda_ * gae * (1 - terminated[t])
+        advantages = np.zeros_like(rewards, dtype=np.float64)
+        returns = np.zeros_like(rewards, dtype=np.float64)
 
-        returns = advantages + values
-        advantages = (advantages - np.mean(advantages)) / (np.std(advantages) + 1e-8)
+        # Calculate returns by iterating backwards through the rewards
+        for i in reversed(range(len(rewards))):
+
+            # if this is the last position of the batch retrieve the next value
+            if i != len(rewards) - 1:
+                next_value = values[i + 1]
+
+            # update next_value and gae according to the fact that this may be a terminal state
+            next_value = next_value * (1 - dones[i])
+            gae = gae * (1 - dones[i])
+
+            # compute advantages
+            delta = rewards[i] + (gamma * next_value) - values[i]
+            advantages[i] = gae = delta + gamma * lambda_ * gae
+
+        # normalize the advantage
+        advantages = advantages - np.mean(advantages) / (np.std(advantages) + 1e-10)
 
         return torch.tensor(advantages, dtype=torch.float32), torch.tensor(returns, dtype=torch.float32)
 
-    def get_batches(self, policy_network, device, td_gamma=0.999, gae_lambda=0.95, shuffle=True):
+    def get_batches(self, next_value, device, td_gamma=0.999, gae_lambda=0.95, shuffle=True):
         """
         Creates batches of data for training using the stored experiences.
         """
-        next_states = self.get("next_states", return_type="torch").to(device)
-
-        with torch.no_grad():
-            _, next_values_tensor = policy_network(next_states)
-        next_values = next_values_tensor.squeeze().cpu().numpy()
-        advantages, returns = self.compute_advantage_and_returns(next_values, td_gamma, gae_lambda)
+        advantages, returns = self.compute_advantage_and_returns(next_value, td_gamma, gae_lambda)
 
         states = self.get("states", return_type="torch").to(device)
         actions = self.get("actions", return_type="torch").to(device)
