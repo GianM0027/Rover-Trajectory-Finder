@@ -64,7 +64,7 @@ agent = Agent(policy_network=policy_network,
 
 if TRAIN:
     agent.seed = TRAINING_SEED
-    agent.train(training_episodes=100000,
+    agent.train(training_episodes=1000000,
                 batch_size=512,
                 minibatch_size=256,
                 epochs=3,
