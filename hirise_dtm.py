@@ -49,8 +49,9 @@ class HiriseDTM:
                 break
 
         if random_rotation:
-            # todo: data augmentation sulle porzioni della mappa, effettua una rotazione random dell'immagine
-            pass
+            # rotate by a random multiple of 90 degrees
+            k = np.random.randint(0, 4)
+            image_subset = np.rot90(image_subset, k)
 
         # return image portion and its coordinates as (row,column)=(y,x)
         return image_subset, (y, x)

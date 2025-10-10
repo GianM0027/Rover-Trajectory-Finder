@@ -95,7 +95,7 @@ class Agent:
         ], dtype=np.float32)
         
         padding_mask = np.isnan(channel_zero)
-        min_val, max_val = self.dtm_file.get_lowest_highest_altitude()
+        min_val, max_val = self.mars_environment.min_altitude, self.mars_environment.max_altitude
         if min_val == max_val:
             channel_zero = np.zeros_like(channel_zero)
         else:

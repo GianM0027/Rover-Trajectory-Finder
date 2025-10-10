@@ -51,7 +51,7 @@ class GridMarsEnv(gym.Env):
                  render_window_size=512):
         # Retrieving min and max altitude from map
         self._dtm = dtm
-        min_altitude, max_altitude = self._dtm.get_lowest_highest_altitude()
+        self.min_altitude, self.max_altitude = self._dtm.get_lowest_highest_altitude()
 
         # map size and fov distance
         self.map_size = map_size
@@ -85,7 +85,7 @@ class GridMarsEnv(gym.Env):
                 "target_pos": gym.spaces.Box(0, self.map_size - 1, shape=(2,), dtype=np.int32),   # [y, x] goal coordinates
 
                 # FOV maps info (what the agent sees)
-                "local_fov_values": gym.spaces.Box(min_altitude, max_altitude, shape=(self._fov_matrix_size, self._fov_matrix_size), dtype=np.float32),
+                "local_fov_values": gym.spaces.Box(self.min_altitude, self.max_altitude, shape=(self._fov_matrix_size, self._fov_matrix_size), dtype=np.float32),
                 "local_fov_positions": gym.spaces.Box(low=0, high=self.map_size-1, shape=(self._fov_matrix_size, self._fov_matrix_size, 2), dtype=np.int32),
                 "fov_mask": gym.spaces.MultiBinary((self._fov_matrix_size, self._fov_matrix_size)),
 
