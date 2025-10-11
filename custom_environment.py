@@ -265,11 +265,6 @@ class GridMarsEnv(gym.Env):
         current_distance = self._get_manhattan_distance(self._agent_relative_location, self._target_location)
         if current_distance >= distance_before:
             penalty += self.map_size / self.rover_max_number_of_steps
-
-        # Penalty for revisiting the same spot too many times.
-        """visits_counter = self.visited_locations[self._agent_relative_location[0], self._agent_relative_location[1]]
-        if visits_counter > 2:
-            penalty += 0.02"""
         
         # Big reward for reaching the goal
         if terminated and not truncated:

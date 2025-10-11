@@ -93,7 +93,6 @@ class Agent:
              for x in range(map_shape[1])]
             for y in range(map_shape[0])
         ], dtype=np.float32)
-        
         padding_mask = np.isnan(channel_zero)
         min_val, max_val = self.mars_environment.min_altitude, self.mars_environment.max_altitude
         if min_val == max_val:
@@ -103,6 +102,7 @@ class Agent:
         channel_zero[padding_mask] = padding_number
 
         # Channel 1: agent position
+        # todo: valuta di aggiungere un -1 nella posizione in cui stava l'agente nel frame precedente
         channel_one = np.full(map_shape, fill_value=padding_number, dtype=np.float32)
         channel_one[agent_position[0], agent_position[1]] = 1.0
 
