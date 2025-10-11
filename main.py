@@ -74,7 +74,7 @@ if TRAIN:
                 training_parameters_path=training_parameters_path,
                 device=device,
                 step_verbose=False,
-                learning_rate=5e-5)
+                learning_rate=7e-5)
 else:
     policy_network(torch.randn(1, 2, map_size, map_size))
     agent.policy_network.load_weights(weights_path)
