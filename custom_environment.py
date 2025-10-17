@@ -1,13 +1,11 @@
 import heapq
-from collections import deque
-
 import numpy as np
 import gymnasium as gym
 from typing import Optional
-
-from sniffio import current_async_library
 from hirise_dtm import HiriseDTM
 import pygame
+from collections import deque
+
 
 class GridMarsEnv(gym.Env):
     """
@@ -40,15 +38,18 @@ class GridMarsEnv(gym.Env):
     :param render_window_size: window size for the rendering of the environment when render_mode="human".
     """
 
-    def __init__(self, dtm: HiriseDTM,
+    def __init__(self,
+                 dtm: HiriseDTM = None,
                  map_size: int = 200,
                  fov_distance: int = 20,
                  render_mode: str = 'rgb_array',
                  draw_visited_locations: bool = False,
                  rover_max_step=0.3,
                  rover_max_drop=0.5,
+                 previous_positions_in_obs=5,
                  rover_max_number_of_steps=1000,
                  render_window_size=512):
+
         # Retrieving min and max altitude from map
         self._dtm = dtm
         self.min_altitude, self.max_altitude = self._dtm.get_lowest_highest_altitude()
@@ -56,22 +57,27 @@ class GridMarsEnv(gym.Env):
         # map size and fov distance
         self.map_size = map_size
         self._fov_distance = fov_distance
-        self._fov_matrix_size = (fov_distance*2)+1
+        self._fov_matrix_size = (fov_distance * 2) + 1
 
         # Initialize positions - will be set randomly in reset()
         # Using -1,-1 as "uninitialized" state
         self._agent_global_location = np.array([-1, -1], dtype=np.int32)
         self._agent_relative_location = np.array([-1, -1], dtype=np.int32)
-        self._agent_previous_relative_location = np.array([-1, -1], dtype=np.int32)
         self._target_location = np.array([-1, -1], dtype=np.int32)
+
+        # Previous positions of the agent
+        self._n_previous_positions_in_obs = previous_positions_in_obs
+        self._previous_positions = deque(maxlen=previous_positions_in_obs)
 
         # Initialize local map - it will be the area extracted from the DTM where the agent will navigate
         # setting local map position to -1 as "uninitialized" state
         self._local_map_position = np.array([-1, -1], dtype=np.int32)
         self._local_map = np.zeros([map_size, map_size], dtype=np.float32)
 
-        self.visited_locations = np.zeros([map_size, map_size], dtype=np.int32)               # how many times the agent visited that location
-        self._detected_altitudes = np.zeros([self.map_size, self.map_size], dtype=np.bool_)   # did the agent registered the altitude of that location?
+        self.visited_locations = np.zeros([map_size, map_size],
+                                          dtype=np.int32)  # how many times the agent visited that location
+        self._detected_altitudes = np.zeros([self.map_size, self.map_size],
+                                            dtype=np.bool_)  # did the agent registered the altitude of that location?
 
         # Initialize agent field of view - will be properly set in reset()
         # setting mask to 0 as "uninitialized" state
@@ -79,21 +85,16 @@ class GridMarsEnv(gym.Env):
         self._fov_mask = np.zeros([self._fov_matrix_size, self._fov_matrix_size], dtype=np.bool_)
 
         # Define what the agent can observe
-        self.observation_space = gym.spaces.Dict({
-                "agent_previous_pos": gym.spaces.Box(0, self.map_size - 1, shape=(2,), dtype=np.int32),    # [y, x] agent coordinates previous step
-                "agent_pos": gym.spaces.Box(0, self.map_size - 1, shape=(2,), dtype=np.int32),    # [y, x] agent coordinates
-                "target_pos": gym.spaces.Box(0, self.map_size - 1, shape=(2,), dtype=np.int32),   # [y, x] goal coordinates
+        # Define the bounds for the observation space
+        self._relative_altitudes_clipping = 3.0
+        obs_shape = (4, self.map_size, self.map_size)
 
-                # FOV maps info (what the agent sees)
-                "local_fov_values": gym.spaces.Box(self.min_altitude, self.max_altitude, shape=(self._fov_matrix_size, self._fov_matrix_size), dtype=np.float32),
-                "local_fov_positions": gym.spaces.Box(low=0, high=self.map_size-1, shape=(self._fov_matrix_size, self._fov_matrix_size, 2), dtype=np.int32),
-                "fov_mask": gym.spaces.MultiBinary((self._fov_matrix_size, self._fov_matrix_size)),
-
-                # Local map info (the whole map where the agent is allowed to explore)
-                "local_map": gym.spaces.MultiBinary((self.map_size, self.map_size)),            # map the agent is exploring
-                "local_map_mask": gym.spaces.MultiBinary((self.map_size, self.map_size)),       # locations the agent saw
-                "visited_locations": gym.spaces.MultiBinary((self.map_size, self.map_size))     # location the agent stepped on
-            }
+        # Replace the gym.spaces.Dict with this:
+        self.observation_space = gym.spaces.Box(
+            low=-self._relative_altitudes_clipping,
+            high=self._relative_altitudes_clipping,
+            shape=obs_shape,
+            dtype=np.float32
         )
 
         # Define what actions are available (8 directions)
@@ -101,14 +102,14 @@ class GridMarsEnv(gym.Env):
 
         # Map action numbers to actual movements on the grid
         self._action_to_direction = {
-            0: np.array([0, 1]),        # Move right (y, x+1)
-            1: np.array([1, 0]),        # Move down (y+1, x)
-            2: np.array([0, -1]),       # Move left (y, x-1)
-            3: np.array([-1, 0]),       # Move up (y-1, x)
-            4: np.array([1, 1]),        # Move right-down (y+1, x+1)
-            5: np.array([1, -1]),       # Move left-down (y+1, x-1)
-            6: np.array([-1, 1]),       # Move right-up (y-1, x+1)
-            7: np.array([-1, -1]),      # Move left-up (y-1, x-1)
+            0: np.array([0, 1]),  # Move right (y, x+1)
+            1: np.array([1, 0]),  # Move down (y+1, x)
+            2: np.array([0, -1]),  # Move left (y, x-1)
+            3: np.array([-1, 0]),  # Move up (y-1, x)
+            4: np.array([1, 1]),  # Move right-down (y+1, x+1)
+            5: np.array([1, -1]),  # Move left-down (y+1, x-1)
+            6: np.array([-1, 1]),  # Move right-up (y-1, x+1)
+            7: np.array([-1, -1]),  # Move left-up (y-1, x-1)
         }
 
         self._action_to_direction_string = {
@@ -128,6 +129,7 @@ class GridMarsEnv(gym.Env):
         self.current_move_allowed_flag = True
         self.rover_max_number_of_steps = rover_max_number_of_steps
         self.rover_steps_counter = 0
+        self.best_distance_so_far = None
 
         # rendering parameters
         self.render_mode = render_mode
@@ -152,6 +154,11 @@ class GridMarsEnv(gym.Env):
             super().reset(seed=seed)
             self.is_first_execution = False
 
+        # At the beginning of each episode, randomly rotate the global dtm for data augmentation
+        # fixme: check if this method works and it is not too computationally expensive
+        k = np.random.randint(0, 4)
+        self._dtm.numpy_image = np.rot90(self._dtm.numpy_image, k)
+
         # Select a random portion of the DTM map to use as an environment map
         self._local_map, self._local_map_position = self._dtm.get_portion_of_map(self.map_size, random_rotation=True)
         self.rover_steps_counter = 0
@@ -166,7 +173,8 @@ class GridMarsEnv(gym.Env):
         self._agent_global_location = self._compute_agent_global_position()
 
         # Retrieve the mask corresponding to the visible areas given the global agent position
-        self._fov_mask = self._dtm.get_fov_mask(self._agent_global_location, self._fov_distance, self._action_to_direction)
+        self._fov_mask = self._dtm.get_fov_mask(self._agent_global_location, self._fov_distance,
+                                                self._action_to_direction)
 
         # Randomly place target, ensuring it is different from agent position
         self._target_location = self._agent_relative_location
@@ -175,6 +183,8 @@ class GridMarsEnv(gym.Env):
                 0, self.map_size, size=2, dtype=int
             )
 
+        self._previous_positions.append(self._agent_relative_location)
+        self.best_distance_so_far = self._get_manhattan_distance(self._agent_relative_location, self._target_location)
         self._update_detected_altitudes()
         observation = self._get_obs()
         info = self._get_info()
@@ -205,12 +215,10 @@ class GridMarsEnv(gym.Env):
 
         # Convert the direction (dx, dy) into an index in the 3x3 movements_allowed matrix, to retrieve whether that direction is allowed
         move_index = (1 + direction[0], 1 + direction[1])
-        distance_before = self._get_manhattan_distance(self._agent_relative_location, self._target_location)
 
         # Check if the move is allowed
         if movements_allowed[move_index[0], move_index[1]]:
             # Update agent position, ensuring it stays within grid bounds
-            self._agent_previous_relative_location = self._agent_relative_location
             self._agent_relative_location = self._agent_relative_location + direction
             self._update_fov_coordinates()
             self.current_move_allowed_flag = True
@@ -221,17 +229,19 @@ class GridMarsEnv(gym.Env):
             self.current_move_allowed_flag = False
 
         self._update_visited_locations()
+        self._previous_positions.append(self._agent_relative_location)
 
         # Global position and mask update
         self._agent_global_location = self._compute_agent_global_position()
-        self._fov_mask = self._dtm.get_fov_mask(self._agent_global_location, self._fov_distance, self._action_to_direction)
+        self._fov_mask = self._dtm.get_fov_mask(self._agent_global_location, self._fov_distance,
+                                                self._action_to_direction)
 
         # Check if agent reached the target
         terminated = np.array_equal(self._agent_relative_location, self._target_location)
         truncated = self.rover_max_number_of_steps == self.rover_steps_counter
 
         # Current reward
-        reward = self._compute_reward(terminated, truncated, distance_before)
+        reward = self._compute_reward(terminated, truncated)
 
         # todo: create an energy consumption mechanism depending on the slope.
         #       E.g if last pixel was higher than current -> self.rover_steps_counter += 0.5 instead of 1
@@ -244,7 +254,7 @@ class GridMarsEnv(gym.Env):
             agent_y, agent_x = self._agent_relative_location
             print(f"Agent Position (y, x): {self._agent_relative_location}")
             print(f"This location was visited {self.visited_locations[agent_y, agent_x]} times")
-            print(f"Actions remained: {self.rover_max_number_of_steps-self.rover_steps_counter}")
+            print(f"Actions remained: {self.rover_max_number_of_steps - self.rover_steps_counter}")
             print(f"Action Selected: {self._action_to_direction_string[action]}")
             print(f"Movement allowed: {self.current_move_allowed_flag}")
             print(f"Reward: {reward}")
@@ -252,25 +262,28 @@ class GridMarsEnv(gym.Env):
             if terminated:
                 print("The Rover reached its goal. Simulation concluded")
             if truncated:
-                print(f"The Rover have not reached its goal withing {self.rover_max_number_of_steps} steps. Simulation concluded")
+                print(
+                    f"The Rover have not reached its goal withing {self.rover_max_number_of_steps} steps. Simulation concluded")
             print()
 
         return observation, reward, terminated, truncated, info
 
-    def _compute_reward(self, terminated, truncated, distance_before):
+    def _compute_reward(self, terminated, truncated):
         reward = 0.0
-        penalty = 0.0
-
-        # Penalty for not reaching the target - for efficiency. Not given if current manhattan distance is < than previous
+        success_reward = 10.0
+        time_penalty = success_reward / self.rover_max_number_of_steps
         current_distance = self._get_manhattan_distance(self._agent_relative_location, self._target_location)
-        if current_distance >= distance_before:
-            penalty += self.map_size / self.rover_max_number_of_steps
-        
-        # Big reward for reaching the goal
-        if terminated and not truncated:
-            reward += 10
 
-        return reward - penalty
+        # 1. Reward agent for making real progress (setting a new best distance from the goal)
+        if current_distance < self.best_distance_so_far:
+            reward += 5*time_penalty # todo: tweak the multiplier as needed (5-10)
+            self.best_distance_so_far = current_distance
+
+        # 2. Big reward for reaching the goal
+        if terminated and not truncated:
+            reward += success_reward
+
+        return reward - time_penalty
 
     def render(self):
         if self.render_mode == "human":
@@ -422,16 +435,16 @@ class GridMarsEnv(gym.Env):
     def find_best_path(self, use_slope_cost=False, use_only_detected_altitudes=False):
         start = tuple(self._agent_relative_location)
         target = tuple(self._target_location)
-        
+
         if use_only_detected_altitudes:
             if not self._detected_altitudes[start] or not self._detected_altitudes[target]:
                 return None
 
         adjacency_list = self._dtm.get_adjacency_list(moves=self._action_to_direction,
-                                                    max_step=self.rover_max_step,
-                                                    max_drop=self.rover_max_drop,
-                                                    local_map_size=self.map_size,
-                                                    local_map_position=self._local_map_position)
+                                                      max_step=self.rover_max_step,
+                                                      max_drop=self.rover_max_drop,
+                                                      local_map_size=self.map_size,
+                                                      local_map_position=self._local_map_position)
 
         # Dijkstra: priority queue [(cost, node)]
         heap = [(0, start)]
@@ -455,16 +468,16 @@ class GridMarsEnv(gym.Env):
                 # Ignoring nodes whose altitude is unknown if the flag is set
                 if use_only_detected_altitudes and not self._detected_altitudes[neighbor[0], neighbor[1]]:
                     continue
-                 
+
                 edge_cost = 1.0
 
                 if use_slope_cost:
                     y1, x1 = node
                     y2, x2 = neighbor
-                    
+
                     altitude_diff = self._local_map[y2, x2] - self._local_map[y1, x1]
-                    
-                    edge_cost += abs(altitude_diff) * 0.5 
+
+                    edge_cost += abs(altitude_diff) * 0.5
 
                 new_cost = current_cost + edge_cost
 
@@ -529,28 +542,47 @@ class GridMarsEnv(gym.Env):
         # local map position in (width,height) format + agent location in (y,x) format
         return self._local_map_position + self._agent_relative_location
 
+    def _process_observation(self):
+        padding_number = 0.0
+        map_shape = (self.map_size, self.map_size)
+
+        # --- Channel 0: relative normalized altitudes ---
+        channel_zero = np.where(self._detected_altitudes.astype(np.bool_), self._local_map, np.nan).astype(np.float32)
+        padding_mask = np.isnan(channel_zero)
+        center_altitude = self._local_map[self._agent_relative_location[0], self._agent_relative_location[1]]
+        delta = self._local_map - center_altitude
+        channel_zero = np.where(
+            delta >= 0,
+            delta / self.rover_max_step,
+            delta / abs(self.rover_max_drop)
+        )
+        channel_zero = np.clip(channel_zero, -self._relative_altitudes_clipping, self._relative_altitudes_clipping)
+        channel_zero[padding_mask] = padding_number
+
+        # --- Channel 1: mask (0 = padding / invalid) ---
+        channel_one = np.ones_like(channel_zero, dtype=np.float32)
+        channel_one[padding_mask] = padding_number
+
+        # --- Channel 2: agent (1), previous position (-1) ---
+        channel_two = np.full(map_shape, padding_number, dtype=np.float32)
+        previous_position_values = np.linspace(start=0, stop=1, num=len(self._previous_positions) + 1)[1:-1]
+        for previous_location, location_value in zip(self._previous_positions, previous_position_values):
+            channel_two[previous_location[0], previous_location[1]] = location_value
+        channel_two[self._agent_relative_location[0], self._agent_relative_location[1]] = 1.0
+
+        # --- Channel 3: target ---
+        channel_three = np.full(map_shape, padding_number, dtype=np.float32)
+        channel_three[self._target_location[0], self._target_location[1]] = 1.0
+
+        return np.stack([channel_zero, channel_one, channel_two, channel_three], axis=0)
+
     def _get_obs(self):
         """
         Convert internal state to observation format.
 
         :return: Observation with agent and target positions
         """
-        local_fov_values, local_fov_positions = self._get_fov_map_w_altitudes()
-        return {
-            "agent_previous_pos": self._agent_previous_relative_location,       # [y, x] agent relative coordinates (previous step)
-            "agent_pos": self._agent_relative_location,                         # [y, x] agent relative coordinates
-            "target_pos": self._target_location,                                # [y, x] target relative coordinates
-
-            # fov information
-            "local_fov_values": local_fov_values,            # all altitudes in FOV
-            "local_fov_positions": local_fov_positions,      # coordinates of FOV with local map as reference system (not global)
-            "fov_mask": self._fov_mask.astype(np.bool_),     # boolean mask indicating which pixels are visible to the agent within the FOV
-
-            # local map information
-            "local_map": self._local_map,                                   # Entire local map where the agent is moving (not global)
-            "visited_locations": self.visited_locations,                    # Integer matrix indicating the number of times the agent stepped on that location
-            "local_map_mask": self._detected_altitudes.astype(np.bool_),     # Boolean matrix indicating which locations the agent has seen so far (not necessarily stepped on)
-        }
+        return self._process_observation()
 
     def _update_visited_locations(self):
         y, x = self._agent_relative_location
@@ -562,11 +594,28 @@ class GridMarsEnv(gym.Env):
 
         :return: Debugging info that will be returned from the reset() and step() methods.
         """
+        local_fov_values, local_fov_positions = self._get_fov_map_w_altitudes()
+
         return {
             "distance": np.linalg.norm(self._agent_relative_location - self._target_location, ord=1),
             "agent_relative_position": self._agent_relative_location,
             "agent_global_position": self._agent_global_location,
             "target_position": self._target_location,
+            "n_previous_positions_in_obs": self._n_previous_positions_in_obs,
+            "previous_positions": self._previous_positions,
+
+            # fov information
+            "local_fov_values": local_fov_values,  # all altitudes in FOV
+            "local_fov_positions": local_fov_positions,
+
+            # coordinates of FOV with local map as reference system (not global)
+            "fov_mask": self._fov_mask.astype(np.bool_),
+            
+            # Integer matrix indicating the number of times the agent stepped on that location
+            "visited_locations": self.visited_locations,
+
+            # Local map the agent is navigating on
+            "local_map": self._local_map,
         }
 
     @classmethod
