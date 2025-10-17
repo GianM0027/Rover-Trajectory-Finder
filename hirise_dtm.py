@@ -1,12 +1,10 @@
 import os
-from collections import deque
-
 import rasterio
 import numpy as np
 from typing import Tuple, Dict
 from matplotlib import pyplot as plt
 
-plt.style.use('default')  # Stile classico con sfondo bianco
+plt.style.use('default')
 
 
 class HiriseDTM:
@@ -17,19 +15,23 @@ class HiriseDTM:
     :param img_path: Path to a local HiRISE .IMG file.
     """
 
-    def __init__(self, img_path: str | os.PathLike):
-        with rasterio.open(img_path) as src:
-            data = src.read(1)      # first band
-            nodata = src.nodata     # check nodata value
+    def __init__(self, img_path: str | os.PathLike=None, img=None):
+        if img_path:
+            with rasterio.open(img_path) as src:
+                data = src.read(1)      # first band
+                nodata = src.nodata     # check nodata value
 
-        if nodata is not None:
-            data = data.astype(float)
-            data[data == nodata] = np.inf  # infinitely tall wall at map borders
+            if nodata is not None:
+                data = data.astype(float)
+                data[data == nodata] = np.inf  # infinitely tall wall at map borders
+            
+            self.img_path = img_path
+            self.file_name = os.path.split(img_path)[-1].replace(".IMG", "")
+            self.metadata = self._get_metadata()
+        else:
+            data = np.array(img)
 
         self.numpy_image = data
-        self.img_path = img_path
-        self.file_name = os.path.split(img_path)[-1].replace(".IMG", "")
-        self.metadata = self._get_metadata()
 
     def get_portion_of_map(self, size, max_percentage_inf=0, random_rotation=False):
         # Extracts a size x size portion of the image, avoiding too many np.inf
@@ -47,11 +49,6 @@ class HiriseDTM:
             num_inf = np.sum(np.isinf(image_subset))
             if num_inf <= max_percentage_inf * (size * size):
                 break
-
-        if random_rotation:
-            # rotate by a random multiple of 90 degrees
-            k = np.random.randint(0, 4)
-            image_subset = np.rot90(image_subset, k)
 
         # return image portion and its coordinates as (row,column)=(y,x)
         return image_subset, (y, x)
@@ -81,6 +78,10 @@ class HiriseDTM:
         return visibles
 
     def get_fov_mask(self, position, fov_distance, action_to_direction):
+        """
+        Given the agent global location and its fov distance, compute the points that are visible within the fov distance
+        along the possible directions it can move towards.
+        """
         mask_size = (fov_distance * 2) + 1
         fov_mask = np.zeros((mask_size, mask_size))
 
@@ -111,7 +112,7 @@ class HiriseDTM:
 
     def get_possible_moves(self, position, moves, max_step, max_drop, local_map_size, local_map_position):
         """
-        Given a point (y, x), returns a 3x3 boolean matrix of possible moves.
+        Given a global location (y, x), returns a 3x3 boolean matrix of possible moves.
         - 1 = rover can move there
         - 0 = rover cannot move there
         """
