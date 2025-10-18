@@ -9,21 +9,20 @@ from collections import deque
 
 class GridMarsEnv(gym.Env):
     """
-    GridMarsEnv: A Gymnasium environment simulating a Mars rover navigating a gridworld.
+    Gymnasium environment simulating a Mars rover navigating a grid-based terrain using real altitude data from a HiriseDTM object.
 
-    The rover knows its landing position and the target location but can only perceive its
-    local surroundings through a limited field of view (FOV). The environment provides a
-    matrix of altitude values within the FOV and a corresponding mask indicating which
-    cells are observable.
+    The rover knows its starting position and the target location but can only observe a local field of view (FOV).
+    The observation includes relative altitudes, a validity mask, the agent's current and recent positions, and the target location.
 
-    Observation Space (Dict):
-        - "agent": 2D coordinates [y, x] of the rover.
-        - "target": 2D coordinates [y, x] of the destination.
-        - "local_map": (fov_distance x fov_distance) matrix of altitude values in the rover's FOV.
-        - "mask": (fov_distance x fov_distance) binary matrix indicating which cells are observable in the local_map.
+    Observation Space (Box):
+    - 4-channel matrix of shape (4, map_size, map_size):
+        1. Relative normalized altitudes: altitude differences relative to the agent, normalized and clipped.
+        2. Validity mask: 1 for observable cells, 0 for padding/unknown areas.
+        3. Agent and path history: 1 for the current agent position; past positions encoded between 0 and 1.
+        4. Target location: 1 at the target, 0 elsewhere.
 
     Action Space (Discrete):
-        - 8 possible movements corresponding to the cardinal and diagonal directions.
+    - 8 discrete movements corresponding to cardinal and diagonal directions.
 
     :param dtm: a HiriseDTM object containing the terrain data.
     :param map_size: size of the gridworld (map_size x map_size).
@@ -35,6 +34,8 @@ class GridMarsEnv(gym.Env):
     :param draw_visited_locations: when render_mode is set to human. This flag sets whether to draw visited locations on the map.
     :param rover_max_step: maximum obstacle height the rover can overcome when moving on the map.
     :param rover_max_drop: maximum drop the rover can overcome when moving on the map.
+    :param previous_positions_in_obs: how many previous agent locations to include in the returned observation.
+    :param rover_max_number_of_steps: how many steps the agent is allowed to perform before the episode is truncated.
     :param render_window_size: window size for the rendering of the environment when render_mode="human".
     """
 
@@ -155,12 +156,11 @@ class GridMarsEnv(gym.Env):
             self.is_first_execution = False
 
         # At the beginning of each episode, randomly rotate the global dtm for data augmentation
-        # fixme: check if this method works and it is not too computationally expensive
         k = np.random.randint(0, 4)
         self._dtm.numpy_image = np.rot90(self._dtm.numpy_image, k)
 
         # Select a random portion of the DTM map to use as an environment map
-        self._local_map, self._local_map_position = self._dtm.get_portion_of_map(self.map_size, random_rotation=True)
+        self._local_map, self._local_map_position = self._dtm.get_portion_of_map(self.map_size)
         self.rover_steps_counter = 0
         self.visited_locations = np.zeros([self.map_size, self.map_size], dtype=np.int32)
 
