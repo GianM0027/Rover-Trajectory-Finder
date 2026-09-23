@@ -20,14 +20,29 @@ def initialize_weights(m):
             init.constant_(m.bias, 0)
 
 
+def normalization(channels):
+    """
+    Per-sample normalisation.
+
+    BatchNorm cannot be used here: it normalises over the batch, so the network's output for one
+    state depends on the other states batched with it. On-policy RL evaluates the same state in
+    two different batches - 32 parallel environments while collecting, a few hundred shuffled
+    samples while updating - which makes the stored action probabilities and values disagree with
+    the ones the update recomputes, and the PPO importance ratio ends up measuring batch
+    composition instead of policy change. GroupNorm normalises within each sample, so a state
+    always maps to the same output.
+    """
+    return nn.GroupNorm(num_groups=min(8, channels), num_channels=channels)
+
+
 class ResidualBlock(nn.Module):
     def __init__(self, filters):
         super(ResidualBlock, self).__init__()
         self.conv1 = nn.Conv2d(filters, filters, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(filters)
+        self.bn1 = normalization(filters)
         self.relu = nn.ReLU()
         self.conv2 = nn.Conv2d(filters, filters, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(filters)
+        self.bn2 = normalization(filters)
         
         self.shortcut = nn.Sequential()
 
@@ -46,7 +61,7 @@ class ConvolutionalBlock(nn.Module):
         super(ConvolutionalBlock, self).__init__()
 
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, stride=2)
-        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.bn1 = normalization(out_channels)
         self.resblock1 = ResidualBlock(out_channels)
         self.resblock2 = ResidualBlock(out_channels)
 
@@ -59,10 +74,10 @@ class ConvolutionalBlock(nn.Module):
 
 
 class ImpalaModel(nn.Module):
-    def __init__(self, action_space=8, input_channels=8):
+    def __init__(self, action_space=8, input_channels=6):
         super(ImpalaModel, self).__init__()
 
-        self.conv_block1 = ConvolutionalBlock(input_channels, 16)
+        self.conv_block1 = ConvolutionalBlock(input_channels,  16)
         self.conv_block2 = ConvolutionalBlock(16, 32)
         self.conv_block3 = ConvolutionalBlock(32, 32)
 
@@ -74,7 +89,13 @@ class ImpalaModel(nn.Module):
 
         # self.apply(initialize_weights)
 
-    def forward(self, x):
+    def forward(self, x, action_mask=None):
+        """
+        :param x: observation batch of shape (batch, channels, map_size, map_size).
+        :param action_mask: optional boolean tensor (batch, action_space); actions marked False
+                            are given zero probability, so the rover never picks a move the
+                            terrain forbids.
+        """
         x = self.conv_block1(x)
         x = self.conv_block2(x)
         x = self.conv_block3(x)
@@ -85,7 +106,15 @@ class ImpalaModel(nn.Module):
         x = self.feed_forward(x)
         x = F.relu(x)
 
-        policy = self.softmax_activation(self.policy_head(x))
+        logits = self.policy_head(x)
+
+        if action_mask is not None:
+            # a rover boxed in on every side would leave a row of -inf and a NaN softmax,
+            # so those rows are left unmasked and fall back to the full action set
+            has_valid_move = action_mask.any(dim=1, keepdim=True)
+            logits = logits.masked_fill(~(action_mask | ~has_valid_move), float('-inf'))
+
+        policy = self.softmax_activation(logits)
         value = self.value_head(x)
 
         return policy, value

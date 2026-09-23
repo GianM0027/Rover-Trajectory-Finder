@@ -11,6 +11,7 @@ from torch import nn, optim
 from constants import *
 from custom_environment import GridMarsEnv
 from experience_manager import ExperienceManager
+from tile_pool import TilePool
 from impala import ImpalaModel
 
 
@@ -18,7 +19,7 @@ class Agent:
     def __init__(self,
                  n_environments=None,
                  policy_network=None,
-                 dtm_file=None,
+                 tile_pool_path=None,
                  fov_distance=None,
                  map_size=None,
                  seed=None,
@@ -32,7 +33,7 @@ class Agent:
         self.max_step_height = max_step_height
         self.max_drop_height = max_drop_height
         self.fov_distance = fov_distance
-        self.dtm_file = dtm_file
+        self.tile_pool_path = tile_pool_path
         self.map_size = map_size
         self.n_environments = n_environments
 
@@ -45,7 +46,7 @@ class Agent:
                        render_mode="human",
                        n_actions=8):
 
-        test_environment = GridMarsEnv(dtm=self.dtm_file,
+        test_environment = GridMarsEnv(dtm=TilePool(self.tile_pool_path),
                                        map_size=self.map_size,
                                        fov_distance=self.fov_distance,
                                        rover_max_step=self.max_step_height,
@@ -60,7 +61,7 @@ class Agent:
         n_episode = 0
         while True:
             print(f"Episode #{n_episode + 1}")
-            observation, _ = test_environment.reset(seed=self.seed)
+            observation, info = test_environment.reset(seed=self.seed, render_optimal_path=True)
             terminated = False
             truncated = False
 
@@ -68,7 +69,8 @@ class Agent:
                 if use_policy_network:
                     with torch.no_grad():
                         processed_frame = torch.tensor(observation).float().unsqueeze(0).to(device)
-                        action_probs, _ = self.policy_network(processed_frame)
+                        mask = torch.tensor(info["action_mask"]).unsqueeze(0).to(device)
+                        action_probs, _ = self.policy_network(processed_frame, action_mask=mask)
 
                     if sample_action:
                         action = torch.distributions.Categorical(probs=action_probs).sample().item()
@@ -77,7 +79,7 @@ class Agent:
                 else:
                     action = np.random.randint(n_actions)
 
-                observation, _, terminated, truncated, _ = test_environment.step(action, verbose=verbose)
+                observation, _, terminated, truncated, info = test_environment.step(action, verbose=verbose)
 
             n_episode += 1
             if max_episodes is not None and n_episode >= max_episodes:
@@ -95,6 +97,7 @@ class Agent:
             learning_rate = configuration["learning_rate"]
             freeze_cnn = configuration["freeze_cnn"]
             c2 = configuration["c2"]
+            c1 = configuration.get("c1", 0.05)
             weights_to_reload = configuration["weights_to_reload"]
 
             self.map_size = configuration["map_size"]
@@ -104,11 +107,11 @@ class Agent:
             cnn_weights_path, full_weights_path = get_weights_path(self.map_size, step=step)
             training_info_path, training_losses_path, training_parameters_path = get_training_info_path(self.map_size, step=step)
 
-            self.policy_network = ImpalaModel(input_channels=4)
+            self.policy_network = ImpalaModel(input_channels=OBSERVATION_CHANNELS)
             optimizer = optim.Adam(self.policy_network.parameters(), lr=learning_rate)
 
             if weights_to_reload is not None:
-                self.policy_network(torch.randn(1, 4, self.map_size, self.map_size))
+                self.policy_network(torch.randn(1, OBSERVATION_CHANNELS, self.map_size, self.map_size))
 
                 if "cnn" in weights_to_reload:
                     self.policy_network.load_feature_extractor_weights(weights_to_reload)
@@ -121,7 +124,7 @@ class Agent:
                         param.requires_grad = False
 
             mars_environments = gym.vector.AsyncVectorEnv([
-                lambda: GridMarsEnv(dtm=self.dtm_file,
+                lambda: GridMarsEnv(dtm=TilePool(self.tile_pool_path),
                                     map_size=self.map_size,
                                     fov_distance=self.fov_distance,
                                     rover_max_step=self.max_step_height,
@@ -145,6 +148,7 @@ class Agent:
                        device=device,
                        learning_rate=learning_rate,
                        save_interval=100000,
+                       c1=c1,
                        c2=c2,
                        optimizer=optimizer)
 
@@ -163,7 +167,7 @@ class Agent:
               epochs=1,
               device='cuda',
               clip_ratio=0.2,
-              c1=0.5,
+              c1=0.05,
               c2=0.01,
               learning_rate=1e-5,
               cnn_weights_path=None,
@@ -196,8 +200,6 @@ class Agent:
                 "max_number_of_steps": self.max_number_of_steps,
                 "max_step_height": self.max_step_height,
                 "max_drop_height": self.max_drop_height,
-                "map_name": self.dtm_file.img_path,
-
                 "learning_rate": learning_rate,
                 "batch_size": batch_size,
                 "minibatch_size": minibatch_size,
@@ -226,9 +228,15 @@ class Agent:
                 current_step += self.n_environments
                 pbar.update(self.n_environments)
 
+                # the observation and mask the action is chosen from; environments.step() below
+                # rebinds observations to the next state, so they are captured first
+                states = observations
+                action_masks = info["action_mask"]
+
                 with torch.no_grad():
-                    obs_tensor = torch.tensor(observations).to(device)
-                    action_probs, values = self.policy_network(obs_tensor)
+                    obs_tensor = torch.tensor(states).to(device)
+                    mask_tensor = torch.tensor(action_masks).to(device)
+                    action_probs, values = self.policy_network(obs_tensor, action_mask=mask_tensor)
 
                 dist = torch.distributions.Categorical(probs=action_probs)
                 actions = dist.sample()
@@ -237,9 +245,10 @@ class Agent:
                 observations, rewards, terminated, truncated, info = environments.step(actions.cpu().numpy())
 
                 experience_manager.appendTrajectory(
-                    states=observations,
+                    states=states,
                     actions=actions.cpu().numpy(),
                     action_probs=prob_of_taken_action.detach().cpu().numpy(),
+                    action_masks=action_masks,
                     rewards=rewards,
                     values=values.squeeze(-1).cpu().numpy(),
                     terminated=terminated,
@@ -263,13 +272,15 @@ class Agent:
                 if experience_manager.is_full():
                     with torch.no_grad():
                         obs_tensor = torch.tensor(observations).to(device)
-                        _, next_values = self.policy_network(obs_tensor)
+                        mask_tensor = torch.tensor(info["action_mask"]).to(device)
+                        _, next_values = self.policy_network(obs_tensor, action_mask=mask_tensor)
 
                     dataloader = experience_manager.get_batches(next_values=next_values.cpu().numpy(), device=device)
                     update_losses = []
                     for _ in range(epochs):
-                        for states, actions, old_action_probs, advantages, returns in dataloader:
-                            current_action_dist, values = self.policy_network(states)
+                        for states, actions, old_action_probs, masks, advantages, returns in dataloader:
+                            current_action_dist, values = self.policy_network(states,
+                                                                              action_mask=masks.bool())
                             current_action_probs = current_action_dist.gather(
                                 dim=1,
                                 index=actions.unsqueeze(-1).to(torch.int64)
@@ -339,3 +350,109 @@ class Agent:
             os.makedirs(os.path.dirname(cnn_weights_path), exist_ok=True)
             os.makedirs(os.path.dirname(full_weights_path), exist_ok=True)
             self.policy_network.save_weights(cnn_weights_path, full_weights_path)
+
+    def validate(self,
+                 num_episodes=100,
+                 device="cuda",
+                 policy_network=None,
+                 validation_info_path=None,
+                 sample_action=True):
+
+        # Actions are sampled rather than taken greedily by default. With argmax the policy is
+        # deterministic and, since the action mask forbids standing still, a state whose best
+        # action is blocked sends the rover oscillating between two cells for the rest of the
+        # episode: measured on the trained policy, argmax scores 60.5% against 92.5% sampled,
+        # and the failures burn the full step budget while visiting ~15 of 400 cells.
+
+        # with no policy network, actions are drawn uniformly at random (baseline)
+        is_random_mode = policy_network is None
+        action_dim = None
+
+        if is_random_mode:
+            action_dim = 8
+        else:
+            print("Validating with POLICY NETWORK...")
+            policy_network.eval()
+            policy_network.to(device)
+
+        all_episodes_info = []
+        info_to_save = {
+            env: self._init_info_to_save() for env in range(self.n_environments)
+        }
+
+        environments = gym.vector.AsyncVectorEnv([
+            lambda: GridMarsEnv(dtm=TilePool(self.tile_pool_path),
+                                map_size=self.map_size,
+                                fov_distance=self.fov_distance,
+                                rover_max_step=self.max_step_height,
+                                rover_max_drop=self.max_drop_height,
+                                rover_max_number_of_steps=self.max_number_of_steps)
+            for _ in range(self.n_environments)
+        ],
+            shared_memory=False
+        )
+
+        # reset environments and save initial position of agent during first episode
+        observations, info = environments.reset(seed=self.seed)
+        for env in range(self.n_environments):
+            info_to_save[env]["agent_positions"].append(
+                info["agent_relative_position"][env].tolist())
+
+        completed_episodes = 0
+        with tqdm(total=num_episodes, desc="Validating") as pbar:
+            while completed_episodes < num_episodes:
+
+                if is_random_mode:
+                    actions = np.random.randint(0, action_dim,
+                                                size=self.n_environments)
+                else:
+                    with torch.no_grad():
+                        obs_tensor = torch.tensor(observations).to(device)
+                        mask_tensor = torch.tensor(info["action_mask"]).to(device)
+                        action_probs, _ = policy_network(obs_tensor, action_mask=mask_tensor)
+                        if sample_action:
+                            actions = torch.distributions.Categorical(
+                                probs=action_probs).sample().cpu().numpy()
+                        else:
+                            actions = torch.argmax(action_probs, dim=1).cpu().numpy()
+
+                observations, rewards, terminated, truncated, info = environments.step(actions)
+
+                for env in range(self.n_environments):
+                    info_to_save[env]["episode_length"] += 1
+                    info_to_save[env]["agent_positions"].append(
+                        info["agent_relative_position"][env].tolist())
+
+                    info_to_save[env]["rewards"].append(rewards[env].item())
+
+                    # an environment that is done is autoreset by the vector env
+                    if terminated[env] or truncated[env]:
+                        # episodes finishing after the quota are dropped, not truncated
+                        if completed_episodes < num_episodes:
+                            info_to_save[env]["terminated"] = bool(terminated[env])
+                            info_to_save[env]["truncated"] = bool(truncated[env])
+                            info_to_save[env]["target_position"] = (
+                                info["target_position"][env].tolist())
+                            info_to_save[env]["local_map"] = (
+                                info["local_map"][env].tolist())
+
+                            all_episodes_info.append(info_to_save[env])
+
+                            completed_episodes += 1
+                            pbar.update(1)
+
+                        info_to_save[env] = self._init_info_to_save()
+                        info_to_save[env]["agent_positions"].append(
+                            info["agent_relative_position"][env].tolist())
+
+        if validation_info_path:
+            print(f"\nSaving validation info for {len(all_episodes_info)} episodes to {validation_info_path}")
+            parent_dir = os.path.dirname(validation_info_path)
+            if parent_dir:
+                os.makedirs(parent_dir, exist_ok=True)
+
+            with open(validation_info_path, "w") as f:
+                json.dump(all_episodes_info, f, indent=4)
+
+        print("Validation finished.")
+        return all_episodes_info

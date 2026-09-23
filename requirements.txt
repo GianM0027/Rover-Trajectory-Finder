@@ -1,11 +1,11 @@
 torch
-torchvision
-torchaudio
 gymnasium
 numpy
-Pillow
+rasterio
+orjson
 matplotlib
+pandas
+seaborn
 tqdm
 jupyter
 pygame
-rosterio

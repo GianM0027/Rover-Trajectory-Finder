@@ -3,6 +3,7 @@ import numpy as np
 import gymnasium as gym
 from typing import Optional
 from hirise_dtm import HiriseDTM
+from tile_pool import TilePool
 import pygame
 from collections import deque
 
@@ -15,16 +16,26 @@ class GridMarsEnv(gym.Env):
     The observation includes relative altitudes, a validity mask, the agent's current and recent positions, and the target location.
 
     Observation Space (Box):
-    - 4-channel matrix of shape (4, map_size, map_size):
+    - 6-channel matrix of shape (6, map_size, map_size):
         1. Relative normalized altitudes: altitude differences relative to the agent, normalized and clipped.
         2. Validity mask: 1 for observable cells, 0 for padding/unknown areas.
         3. Agent and path history: 1 for the current agent position; past positions encoded between 0 and 1.
         4. Target location: 1 at the target, 0 elsewhere.
+        5. Row offset to the target, normalized, constant over the whole map.
+        6. Column offset to the target, normalized, constant over the whole map.
+
+    Channels 5 and 6 state the agent-to-target vector outright. Channels 3 and 4 already carry it,
+    but only as two single lit pixels in a map_size x map_size grid: the convolutional trunk
+    reduces 20x20 to 3x3 before its dense layer, by which point both pixels usually fall in the
+    same cell and their relative position is no longer recoverable. A network trained on that
+    observation instead keys on where the target sits in absolute terms - a shortcut that holds
+    along a straight approach and collapses everywhere else.
 
     Action Space (Discrete):
     - 8 discrete movements corresponding to cardinal and diagonal directions.
 
-    :param dtm: a HiriseDTM object containing the terrain data.
+    :param dtm: the terrain source: a TilePool (a map is drawn from it each episode), a list
+                of HiriseDTM to pick from, or a single HiriseDTM.
     :param map_size: size of the gridworld (map_size x map_size).
     :param fov_distance: ray of the rover's field of view. So that the full FOV size is a square matrix of size (fov_distance*2)+1.
     :param render_mode: possible values are "human", "ascii" and "rgb_array".
@@ -32,10 +43,16 @@ class GridMarsEnv(gym.Env):
                         If set to "ascii", graphic rendering is performed by using ascii.
                         Otherwise, no rendering is performed.
     :param draw_visited_locations: when render_mode is set to human. This flag sets whether to draw visited locations on the map.
+    :param draw_fov: whether to outline the field of view cells; informative while debugging,
+                     clutter when recording a short animation of a large map.
+    :param draw_legend: whether to overlay the keyboard shortcuts.
     :param rover_max_step: maximum obstacle height the rover can overcome when moving on the map.
     :param rover_max_drop: maximum drop the rover can overcome when moving on the map.
     :param previous_positions_in_obs: how many previous agent locations to include in the returned observation.
     :param rover_max_number_of_steps: how many steps the agent is allowed to perform before the episode is truncated.
+    :param shaping_weight: scale of the dense distance-based shaping reward.
+    :param shaping_gamma: discount used by the shaping potential; keep it equal to the discount
+                          used when training, otherwise the shaping stops being policy-invariant.
     :param render_window_size: window size for the rendering of the environment when render_mode="human".
     """
 
@@ -45,15 +62,21 @@ class GridMarsEnv(gym.Env):
                  fov_distance: int = 20,
                  render_mode: str = 'rgb_array',
                  draw_visited_locations: bool = False,
+                 draw_fov: bool = True,
+                 draw_legend: bool = True,
                  rover_max_step=0.3,
                  rover_max_drop=0.5,
                  previous_positions_in_obs=5,
                  rover_max_number_of_steps=1000,
+                 shaping_weight=1.0,
+                 shaping_gamma=0.999,
                  render_window_size=512):
 
-        # Retrieving min and max altitude from map
-        self._dtm = dtm
-        self.min_altitude, self.max_altitude = self._dtm.get_lowest_highest_altitude()
+        # The terrain source is either a TilePool (one small map is drawn per episode), a list
+        # of HiriseDTM to pick from, or a single HiriseDTM.
+        self._tile_pool = dtm if isinstance(dtm, TilePool) else None
+        self._dtm_list = dtm if isinstance(dtm, list) else None
+        self._dtm = dtm if (self._tile_pool is None and self._dtm_list is None) else None
 
         # map size and fov distance
         self.map_size = map_size
@@ -88,7 +111,7 @@ class GridMarsEnv(gym.Env):
         # Define what the agent can observe
         # Define the bounds for the observation space
         self._relative_altitudes_clipping = 3.0
-        obs_shape = (4, self.map_size, self.map_size)
+        obs_shape = (6, self.map_size, self.map_size)
 
         # Replace the gym.spaces.Dict with this:
         self.observation_space = gym.spaces.Box(
@@ -131,22 +154,28 @@ class GridMarsEnv(gym.Env):
         self.rover_max_number_of_steps = rover_max_number_of_steps
         self.rover_steps_counter = 0
         self.best_distance_so_far = None
+        self._previous_distance = None
+        self._shaping_weight = shaping_weight
+        self._shaping_gamma = shaping_gamma
 
         # rendering parameters
         self.render_mode = render_mode
         self.render_window_size = render_window_size
         self.draw_visited_locations = draw_visited_locations
+        self.draw_fov = draw_fov
+        self.draw_legend = draw_legend
         self.window = None
         self.clock = None
 
         # Flag for seed setting
         self.is_first_execution = True
 
-    def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
+    def reset(self, seed: Optional[int] = None, options: Optional[dict] = None, render_optimal_path=False):
         """Start a new episode.
 
         :param seed: Random seed for reproducible episodes
         :param options: Additional configuration (unused in this example)
+        :param render_optimal_path: whether to render the optimal path when render "human" or "ascii" is enabled
 
         :return: (observation, info) for the initial state
         """
@@ -155,14 +184,25 @@ class GridMarsEnv(gym.Env):
             super().reset(seed=seed)
             self.is_first_execution = False
 
-        # At the beginning of each episode, randomly rotate the global dtm for data augmentation
-        k = np.random.randint(0, 4)
-        self._dtm.numpy_image = np.rot90(self._dtm.numpy_image, k)
+        # At the beginning of each episode pick the terrain this episode runs on. The tile pool
+        # already applies its own rotation/flip augmentation when it hands out a tile.
+        if self._tile_pool is not None:
+            self._dtm = self._tile_pool.sample(self.np_random)
+        else:
+            if self._dtm_list is not None:
+                self._dtm = self._dtm_list[np.random.randint(len(self._dtm_list))]
+            k = np.random.randint(0, 4)
+            self._dtm.numpy_image = np.rot90(self._dtm.numpy_image, k)
 
-        # Select a random portion of the DTM map to use as an environment map
-        self._local_map, self._local_map_position = self._dtm.get_portion_of_map(self.map_size)
+        # Select a random portion of the DTM map to use as an environment map. Inside a tile the
+        # crop keeps a field-of-view margin, so the FOV never runs off the edge of the tile.
+        margin = self._fov_distance if self._tile_pool is not None else 0
+        self._local_map, self._local_map_position = self._dtm.get_portion_of_map(self.map_size,
+                                                                                 margin=margin)
         self.rover_steps_counter = 0
         self.visited_locations = np.zeros([self.map_size, self.map_size], dtype=np.int32)
+        self._detected_altitudes = np.zeros([self.map_size, self.map_size], dtype=np.bool_)
+        self._previous_positions.clear()
 
         # Randomly place the agent anywhere on the grid
         self._agent_relative_location = self.np_random.integers(0, self.map_size, size=2, dtype=int)
@@ -185,9 +225,14 @@ class GridMarsEnv(gym.Env):
 
         self._previous_positions.append(self._agent_relative_location)
         self.best_distance_so_far = self._get_manhattan_distance(self._agent_relative_location, self._target_location)
+        self._previous_distance = self.best_distance_so_far
         self._update_detected_altitudes()
         observation = self._get_obs()
         info = self._get_info()
+        self._optimal_path = None
+
+        if render_optimal_path:
+            self._optimal_path = self.find_best_path()
         self.render()
 
         return observation, info
@@ -269,21 +314,34 @@ class GridMarsEnv(gym.Env):
         return observation, reward, terminated, truncated, info
 
     def _compute_reward(self, terminated, truncated):
-        reward = 0.0
+        """
+        Potential-based shaping on the distance to the target, plus a bonus for arriving.
+
+        The shaping term is gamma * PHI(s') - PHI(s) with PHI(s) = -distance, which is dense -
+        every single step says whether it helped - while provably leaving the optimal policy
+        unchanged. The previous version only paid out when the agent beat its best distance ever,
+        which left 98.9% of steps carrying the identical reward and therefore no information at
+        all about which action was good; over an episode averaging 900 steps that is far more
+        than the ~20-step credit horizon of GAE can bridge.
+        """
         success_reward = 10.0
         time_penalty = success_reward / self.rover_max_number_of_steps
         current_distance = self._get_manhattan_distance(self._agent_relative_location, self._target_location)
 
-        # 1. Reward agent for making real progress (setting a new best distance from the goal)
-        if current_distance < self.best_distance_so_far:
-            reward += 5*time_penalty # todo: tweak the multiplier as needed (5-10)
-            self.best_distance_so_far = current_distance
+        # 1. Dense progress signal, telescoping so that wandering back and forth earns nothing
+        shaping = self._shaping_gamma * (-current_distance) - (-self._previous_distance)
+        self._previous_distance = current_distance
+
+        reward = self._shaping_weight * shaping - time_penalty
 
         # 2. Big reward for reaching the goal
         if terminated and not truncated:
             reward += success_reward
 
-        return reward - time_penalty
+        if current_distance < self.best_distance_so_far:
+            self.best_distance_so_far = current_distance
+
+        return reward
 
     def render(self):
         if self.render_mode == "human":
@@ -346,8 +404,7 @@ class GridMarsEnv(gym.Env):
                 if np.isinf(self._local_map[y, x]):
                     color = (0, 0, 0)  # very high wall
                 else:
-                    gray = int(255 * (1 - norm[y, x]))
-                    color = (gray, gray, gray)
+                    color = self._terrain_colour(norm[y, x])
                 raw_surface.set_at((x, y), color)
 
                 # If visited, draw a light blue dot on location
@@ -360,21 +417,8 @@ class GridMarsEnv(gym.Env):
 
         pix_square_size = self.render_window_size / self.map_size
 
-        # --- Draw target ---
-        ty, tx = self._target_location
-        pygame.draw.rect(canvas, (255, 0, 0),
-                         pygame.Rect(tx * pix_square_size, ty * pix_square_size,
-                                     pix_square_size, pix_square_size))
-
-        # --- Draw agent ---
-        ay, ax = self._agent_relative_location
-        pygame.draw.circle(canvas, (0, 0, 255),
-                           (int((ax + 0.5) * pix_square_size),
-                            int((ay + 0.5) * pix_square_size)),
-                           int(pix_square_size // 3))
-
         # --- Draw FOV highlights ---
-        for fy, fx in self._fov_coordinates:
+        for fy, fx in (self._fov_coordinates if self.draw_fov else []):
             rel_idx = np.array([fy, fx]) - np.array(self._agent_relative_location)
             fov_idx = rel_idx + np.array([self._fov_distance, self._fov_distance])
 
@@ -387,7 +431,50 @@ class GridMarsEnv(gym.Env):
                 else:
                     pygame.draw.rect(canvas, (255, 0, 0), rect, width=1)
 
+        # --- Draw optimal path ---
+        optimal_path = getattr(self, "_optimal_path", None)
+        if optimal_path is not None:
+            # amber, so the reference path stays distinct from the light blue cells the rover
+            # has actually visited
+            path_color = (255, 193, 7)
+            dot_radius = max(1, int(pix_square_size / 5))
+
+            for point in optimal_path:
+                # Assuming point is in (y, x) format, like agent/target
+                y, x = point
+                center_x = int((x + 0.5) * pix_square_size)
+                center_y = int((y + 0.5) * pix_square_size)
+                pygame.draw.circle(canvas, path_color, (center_x, center_y), dot_radius)
+
+        # --- Draw target ---
+        ty, tx = self._target_location
+        target_rect = pygame.Rect(tx * pix_square_size, ty * pix_square_size,
+                                  pix_square_size, pix_square_size)
+        pygame.draw.rect(canvas, (220, 30, 45), target_rect)
+        pygame.draw.rect(canvas, (255, 255, 255), target_rect,
+                         width=max(1, int(pix_square_size * 0.12)))
+
+        # --- Draw agent ---
+        ay, ax = self._agent_relative_location
+        self._draw_rover(canvas,
+                         (ax + 0.5) * pix_square_size,
+                         (ay + 0.5) * pix_square_size,
+                         pix_square_size)
+
         # --- Draw legend with semi-transparent background ---
+        if self.draw_legend:
+            self._draw_legend(canvas)
+
+        # --- Push canvas to window ---
+        self.window.blit(canvas, canvas.get_rect())
+        pygame.display.update()
+
+        # --- Adjust FPS ---
+        fps = 60 if getattr(self, "_fast_mode", False) else 5
+        self.clock.tick(fps)
+
+    @staticmethod
+    def _draw_legend(canvas):
         font = pygame.font.SysFont("Arial", 16)
         legend_texts = ["P = Pause - Q = Quit - Y = Speed Up"]
 
@@ -402,13 +489,69 @@ class GridMarsEnv(gym.Env):
 
         canvas.blit(legend_surface, (5, 5))
 
-        # --- Push canvas to window ---
-        self.window.blit(canvas, canvas.get_rect())
-        pygame.display.update()
+    # Low ground to high ground, in Mars tones: shadowed basalt, rust, dust, pale rim.
+    _TERRAIN_RAMP = ((38, 26, 22), (112, 56, 38), (176, 104, 66), (214, 158, 114), (240, 214, 186))
 
-        # --- Adjust FPS ---
-        fps = 60 if getattr(self, "_fast_mode", False) else 5
-        self.clock.tick(fps)
+    @classmethod
+    def _terrain_colour(cls, normalised_altitude):
+        """Map a 0-1 altitude to a colour by interpolating along the terrain ramp."""
+        ramp = cls._TERRAIN_RAMP
+        position = float(np.clip(normalised_altitude, 0.0, 1.0)) * (len(ramp) - 1)
+        low = int(position)
+        if low >= len(ramp) - 1:
+            return ramp[-1]
+        weight = position - low
+        return tuple(int(round(a + (b - a) * weight)) for a, b in zip(ramp[low], ramp[low + 1]))
+
+    @staticmethod
+    def _draw_rover(surface, center_x, center_y, cell_size):
+        """
+        Draw a small rover glyph centred on a cell: six wheels, a body, a mast and a dish.
+
+        Everything is derived from cell_size so the glyph scales with the map, and it is drawn
+        on top of the terrain, which is why the outlines are dark and the body is light.
+        """
+        scale = max(cell_size, 6.0)
+        body_w, body_h = scale * 1.10, scale * 0.52
+        wheel_r = max(1, int(round(scale * 0.15)))
+
+        body = pygame.Rect(0, 0, int(body_w), int(body_h))
+        body.center = (int(center_x), int(center_y))
+
+        chassis = (60, 70, 85)
+        panel = (235, 238, 245)
+        accent = (225, 145, 60)
+
+        # wheels, three per side
+        wheel_y = int(center_y + body_h * 0.45)
+        for i in (-1, 0, 1):
+            wheel_x = int(center_x + i * body_w * 0.34)
+            pygame.draw.circle(surface, chassis, (wheel_x, wheel_y), wheel_r)
+            pygame.draw.circle(surface, (150, 160, 175), (wheel_x, wheel_y), max(1, wheel_r // 2))
+
+        # suspension bar linking the wheels
+        pygame.draw.line(surface, chassis,
+                         (int(center_x - body_w * 0.34), wheel_y),
+                         (int(center_x + body_w * 0.34), wheel_y),
+                         max(1, int(scale * 0.06)))
+
+        # body with a dark outline so it stays readable over light terrain
+        pygame.draw.rect(surface, panel, body, border_radius=max(1, int(scale * 0.12)))
+        pygame.draw.rect(surface, chassis, body, width=max(1, int(scale * 0.06)),
+                         border_radius=max(1, int(scale * 0.12)))
+
+        if scale >= 12:
+            # solar panel seam
+            pygame.draw.line(surface, chassis,
+                             (body.left + body.width * 0.18, body.centery),
+                             (body.right - body.width * 0.18, body.centery),
+                             max(1, int(scale * 0.04)))
+            # mast and communications dish
+            mast_x = int(center_x + body_w * 0.28)
+            mast_top = int(body.top - scale * 0.30)
+            pygame.draw.line(surface, chassis, (mast_x, body.top), (mast_x, mast_top),
+                             max(1, int(scale * 0.06)))
+            pygame.draw.circle(surface, accent, (mast_x, mast_top), max(1, int(scale * 0.11)))
 
     def render_ascii(self, path=None):
         """
@@ -538,6 +681,27 @@ class GridMarsEnv(gym.Env):
             x = min(max(x, 0), self.map_size - 1)
             self._detected_altitudes[y, x] = 1
 
+    def _get_action_mask(self):
+        """
+        Boolean vector over the 8 actions, True where the rover can actually move.
+
+        Handing this to the policy keeps it from picking a move the terrain forbids, which would
+        otherwise leave it standing still on an unchanged observation and picking the same move
+        again on the next step.
+        """
+        possible_moves = self._dtm.get_possible_moves(position=self._agent_global_location,
+                                                      moves=self._action_to_direction,
+                                                      max_step=self.rover_max_step,
+                                                      max_drop=self.rover_max_drop,
+                                                      local_map_size=self.map_size,
+                                                      local_map_position=self._local_map_position)
+
+        action_mask = np.zeros(len(self._action_to_direction), dtype=np.bool_)
+        for action, direction in self._action_to_direction.items():
+            action_mask[action] = possible_moves[1 + direction[0], 1 + direction[1]]
+
+        return action_mask
+
     def _compute_agent_global_position(self):
         # local map position in (width,height) format + agent location in (y,x) format
         return self._local_map_position + self._agent_relative_location
@@ -547,16 +711,18 @@ class GridMarsEnv(gym.Env):
         map_shape = (self.map_size, self.map_size)
 
         # --- Channel 0: relative normalized altitudes ---
-        channel_zero = np.where(self._detected_altitudes.astype(np.bool_), self._local_map, np.nan).astype(np.float32)
-        padding_mask = np.isnan(channel_zero)
-        center_altitude = self._local_map[self._agent_relative_location[0], self._agent_relative_location[1]]
-        delta = self._local_map - center_altitude
-        channel_zero = np.where(
-            delta >= 0,
-            delta / self.rover_max_step,
-            delta / abs(self.rover_max_drop)
-        )
-        channel_zero = np.clip(channel_zero, -self._relative_altitudes_clipping, self._relative_altitudes_clipping)
+        padding_mask = ~self._detected_altitudes.astype(np.bool_)
+        agent_altitude = self._local_map[self._agent_relative_location[0], self._agent_relative_location[1]]
+        delta = self._local_map - agent_altitude
+        # normalised so that +-1 is exactly the limit of what the rover can traverse, whatever
+        # rover_max_step and rover_max_drop are set to, and clipped well beyond it so that
+        # "slightly too steep" and "a cliff" stay distinguishable
+        channel_zero = np.where(delta >= 0,
+                                delta / self.rover_max_step,
+                                delta / abs(self.rover_max_drop))
+        channel_zero = np.clip(channel_zero,
+                               -self._relative_altitudes_clipping,
+                               self._relative_altitudes_clipping)
         channel_zero[padding_mask] = padding_number
 
         # --- Channel 1: mask (0 = padding / invalid) ---
@@ -574,7 +740,14 @@ class GridMarsEnv(gym.Env):
         channel_three = np.full(map_shape, padding_number, dtype=np.float32)
         channel_three[self._target_location[0], self._target_location[1]] = 1.0
 
-        return np.stack([channel_zero, channel_one, channel_two, channel_three], axis=0)
+        # --- Channels 4 and 5: agent-to-target offset, normalised to [-1, 1] and broadcast over
+        # the map so that no amount of downsampling can destroy it ---
+        delta_to_target = (self._target_location - self._agent_relative_location) / self.map_size
+        channel_four = np.full(map_shape, delta_to_target[0], dtype=np.float32)
+        channel_five = np.full(map_shape, delta_to_target[1], dtype=np.float32)
+
+        return np.stack([channel_zero, channel_one, channel_two, channel_three,
+                         channel_four, channel_five], axis=0)
 
     def _get_obs(self):
         """
@@ -611,6 +784,9 @@ class GridMarsEnv(gym.Env):
             # coordinates of FOV with local map as reference system (not global)
             "fov_mask": self._fov_mask.astype(np.bool_),
             
+            # Which of the 8 moves are possible from the current position
+            "action_mask": self._get_action_mask(),
+
             # Integer matrix indicating the number of times the agent stepped on that location
             "visited_locations": self.visited_locations,
 

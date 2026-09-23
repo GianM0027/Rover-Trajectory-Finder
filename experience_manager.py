@@ -20,7 +20,8 @@ class ExperienceManager:
 
         self.experienceDict = {
             env: {
-                key: [] for key in ["states", "actions", "action_probs", "rewards", "values", "terminated", "truncated"]
+                key: [] for key in ["states", "actions", "action_probs", "action_masks",
+                                    "rewards", "values", "terminated", "truncated"]
             } for env in range(self.n_envs)
         }
 
@@ -30,7 +31,8 @@ class ExperienceManager:
         """
         self.experienceDict = {
             env: {
-                key: [] for key in ["states", "actions", "action_probs", "rewards", "values", "terminated", "truncated"]
+                key: [] for key in ["states", "actions", "action_probs", "action_masks",
+                                    "rewards", "values", "terminated", "truncated"]
             } for env in range(self.n_envs)
         }
         self.current_batch_size = 0
@@ -61,7 +63,8 @@ class ExperienceManager:
         """
         return self.current_batch_size >= self.batch_size
 
-    def appendTrajectory(self, states, actions, action_probs, rewards, values, terminated, truncated):
+    def appendTrajectory(self, states, actions, action_probs, action_masks, rewards, values,
+                         terminated, truncated):
         """
         Append a trajectory (experience at a timestep) for each environment.
 
@@ -69,6 +72,7 @@ class ExperienceManager:
         :param position_vectors: position vectors processed and concatenated [5,]
         :param action: Array of actions for each environment.
         :param action_prob: Array of action probabilities for each environment.
+        :param action_masks: Boolean array of legal moves for each environment [n_envs, 8].
         :param reward: Array of rewards for each environment.
         :param value: Array of value estimates for each environment.
         :param terminated: Array of done signals (indicating end of episode) for each environment.
@@ -79,6 +83,7 @@ class ExperienceManager:
             self.experienceDict[env]["states"].append(states[env])
             self.experienceDict[env]["actions"].append(actions[env])
             self.experienceDict[env]["action_probs"].append(action_probs[env])
+            self.experienceDict[env]["action_masks"].append(action_masks[env])
             self.experienceDict[env]["rewards"].append(rewards[env])
             self.experienceDict[env]["values"].append(values[env])
             self.experienceDict[env]["terminated"].append(terminated[env])
@@ -150,8 +155,9 @@ class ExperienceManager:
         states = self.get("states", return_type="torch").to(device)
         actions = self.get("actions", return_type="torch").to(device)
         action_probs = self.get("action_probs", return_type="torch").to(device)
+        action_masks = self.get("action_masks", return_type="torch").to(device)
         advantages = advantages.to(device)
         returns = returns.to(device)
 
-        dataset = TensorDataset(states, actions, action_probs, advantages, returns)
+        dataset = TensorDataset(states, actions, action_probs, action_masks, advantages, returns)
         return DataLoader(dataset, batch_size=self.minibatch_size, shuffle=shuffle)

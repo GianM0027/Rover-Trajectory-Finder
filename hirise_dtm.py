@@ -1,46 +1,102 @@
 import os
 import rasterio
 import numpy as np
+import tempfile
 from typing import Tuple, Dict
 from matplotlib import pyplot as plt
 
 plt.style.use('default')
 
-
 class HiriseDTM:
     """
-    This class takes as input the path to a local HiRISE .IMG file, converts it into a NumPy array,
-    and provides a set of utility functions for working with it.
+    This class takes as input the path to a local HiRISE .IMG file, converts it into a NumPy array
+    (backed by a memory-mapped file for optimization), and provides a set of utility functions.
 
     :param img_path: Path to a local HiRISE .IMG file.
     """
 
-    def __init__(self, img_path: str | os.PathLike=None, img=None):
+    def __init__(self, img_path: str | os.PathLike = None, img=None):
+        self._temp_file_path = None  # Keep track of temp file to delete later
+
         if img_path:
             with rasterio.open(img_path) as src:
-                data = src.read(1)      # first band
-                nodata = src.nodata     # check nodata value
+                # 1. Determine shape and verify nodata
+                shape = src.shape
+                nodata = src.nodata
+                
+                # 2. Create a temporary file on disk to hold the array data
+                # We use delete=False because we need to close the file handle 
+                # so numpy can open it, but we want the file to persist on disk.
+                tf = tempfile.NamedTemporaryFile(delete=False, prefix='hirise_memmap_', suffix='.dat')
+                self._temp_file_path = tf.name
+                tf.close()
 
+                # 3. Create a memory-mapped array (float32 is usually sufficient and saves 50% RAM vs float64)
+                # 'w+' mode allows reading and writing
+                self.numpy_image = np.memmap(self._temp_file_path, dtype='float32', mode='w+', shape=shape)
+
+                # 4. Read data directly from source into the memmap
+                # Rasterio handles the type conversion from the source int/float to our float32 memmap
+                src.read(1, out=self.numpy_image)
+
+            # 5. Handle nodata (Process infinite walls)
+            # This operation happens on disk/cached RAM, not full RAM
             if nodata is not None:
-                data = data.astype(float)
-                data[data == nodata] = np.inf  # infinitely tall wall at map borders
+                # Create a boolean mask (memory efficient)
+                mask = (self.numpy_image == nodata)
+                if np.any(mask):
+                    self.numpy_image[mask] = np.inf
+            
+            # 6. Flush changes to disk and switch to read-only mode to prevent accidental corruption
+            self.numpy_image.flush()
+            # We reopen it in Copy-On-Write or Read-Only mode if desired, 
+            # but 'r+' keeps the link alive easily.
             
             self.img_path = img_path
             self.file_name = os.path.split(img_path)[-1].replace(".IMG", "")
             self.metadata = self._get_metadata()
+            
         else:
+            # If img is passed directly, we just wrap it as a standard array 
+            # (or you could memmap this too if 'img' is massive)
             data = np.array(img)
+            self.numpy_image = data
 
-        self.numpy_image = data
+    def __del__(self):
+        """
+        Cleanup: Ensure the temporary file is deleted when the object is destroyed.
+        """
+        # Close the memmap reference if possible (numpy handles this usually)
+        if hasattr(self, 'numpy_image') and isinstance(self.numpy_image, np.memmap):
+            self.numpy_image._mmap.close()
+            del self.numpy_image
+            
+        # Delete the actual file from disk
+        if self._temp_file_path and os.path.exists(self._temp_file_path):
+            try:
+                os.remove(self._temp_file_path)
+            except PermissionError:
+                pass # Windows sometimes holds locks longer than expected
 
-    def get_portion_of_map(self, size, max_percentage_inf=0):
-        # Extracts a size x size portion of the image, avoiding too many np.inf
+    def get_portion_of_map(self, size, max_percentage_inf=0, margin=0):
+        """
+        Extracts a size x size portion of the image, avoiding too many np.inf.
+
+        :param size: side of the square portion to extract.
+        :param max_percentage_inf: largest fraction of np.inf the portion may contain.
+        :param margin: keep the portion at least this many pixels away from the image border,
+                       so that a field of view of that radius never falls outside the image.
+        """
         img_height, img_width = self.numpy_image.shape[:2]
+
+        if size + 2 * margin > min(img_height, img_width):
+            raise ValueError(f"A {size}x{size} portion with a {margin}px margin does not fit "
+                             f"in an image of shape {(img_height, img_width)}")
 
         while True:
             # pick random top-left corner
-            x = np.random.randint(0, img_width - size + 1)
-            y = np.random.randint(0, img_height - size + 1)
+            x = np.random.randint(margin, img_width - size - margin + 1)
+            y = np.random.randint(margin, img_height - size - margin + 1)
 
             # extract portion
             image_subset = self.numpy_image[y:y + size, x:x + size]
@@ -185,7 +241,7 @@ class HiriseDTM:
 
         Shows the DTM numpy_image in a matplotlib figure.
         """
-        img_to_plot = dtm if dtm else self.numpy_image
+        img_to_plot = dtm if dtm is not None else self.numpy_image
         plt.figure(figsize=figsize)
         plt.imshow(img_to_plot, cmap="terrain")
         plt.colorbar(label="Elevation (m)")
@@ -194,14 +250,13 @@ class HiriseDTM:
 
     def _get_metadata(self) -> Dict:
         """
-        Returns the metadata of a HiRISE .IMG file, given its tile name in the format
-        'aabcd_xxxxxx_xxxx_yyyyyy_yyyy_Vnn'.
-
-        For details on the naming convention, see: https://www.uahirise.org/dtm/about.php.
-
-        :return: A dictionary containing the metadata of the HiRISE .IMG file.
+        Returns the metadata of a HiRISE .IMG file.
         """
         unk = "unknown"
+        # Safety check: ensure file_name is populated
+        if not hasattr(self, 'file_name') or not self.file_name:
+             return {}
+             
         aabcd, xxxxxx, xxxx, yyyyyy, yyyy, Vnn = self.file_name.split("_")
 
         product_type = "DTM" if aabcd[:2] == "DT" else unk
