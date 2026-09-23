@@ -14,7 +14,7 @@ if __name__ == '__main__':
 
     SAVE_RESULTS = True
     RANDOM_POLICY = False
-    SAMPLE_ACTION = True   # argmax blocca il rover in oscillazioni: 60.5% contro 92.5%
+    SAMPLE_ACTION = True   # argmax leaves the rover looping between cells: 60.5% vs 92.5%
     map_size = 20
     step = 0
 

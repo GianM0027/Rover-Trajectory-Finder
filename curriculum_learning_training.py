@@ -4,9 +4,10 @@ from agent import Agent
 from impala import ImpalaModel
 
 curriculum_learning_config = {
-    # Step 0 impara la navigazione su mappe piccole. 20x20 satura verso i 200k passi e da li
-    # peggiora leggermente (91.2% -> 83.4% di successo fra i 200k e i 2M), quindi non serve
-    # allungarlo: i pesi salvati alla fine sarebbero peggiori di quelli a meta' corsa.
+    # Step 0 learns to navigate on small maps. 20x20 saturates around 200k steps and drifts
+    # slightly worse afterwards (91.2% -> 83.4% success between 200k and 2M), so there is no
+    # point extending it: the weights saved at the end would be worse than the ones already
+    # overwritten halfway through.
     0: {
         "training_timesteps": 3e5,
         "map_size": 20,
@@ -18,9 +19,9 @@ curriculum_learning_config = {
         "training_seed": 42
     },
 
-    # Step 1 porta la stessa policy su mappe 40x40. Si ricaricano solo i pesi convoluzionali:
-    # la dense layer ha ingresso fisso (3x3x32 = 288 valori a 20x20, 5x5x32 = 800 a 40x40) e
-    # quindi non e' trasferibile, mentre il tronco che legge il terreno lo e'.
+    # Step 1 moves the same policy onto 40x40 maps. Only the convolutional weights are
+    # reloaded: the dense layer has a fixed input width (3x3x32 = 288 values at 20x20,
+    # 5x5x32 = 800 at 40x40) so it cannot transfer, while the trunk reading the terrain can.
     1: {
         "training_timesteps": 6e5,
         "map_size": 40,
